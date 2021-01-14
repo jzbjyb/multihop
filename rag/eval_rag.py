@@ -283,7 +283,7 @@ def main(args):
         logger.info("  Predictions will be stored under {}".format(args.predictions_path))
 
         if args.model_type.startswith("rag"):
-            retriever = RagRetriever.from_pretrained(checkpoint, **model_kwargs)
+            retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
             model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
         else:
