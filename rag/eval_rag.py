@@ -142,11 +142,11 @@ def evaluate_batch_e2e(args, rag_model, questions):
         return answers
 
 
-def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str], context_titles: List[str], context_docs: List[str]):
+def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
+    qtd = [q.split('\t') for q in questions]
     with torch.no_grad():
-        context_input = rag_model.generator_tokenizer.batch_encode_plus(
-            [(ct + rag_model.config.title_sep + cd + rag_model.config.doc_sep + q).replace("  ", " ")
-             for q, ct, cd in zip(questions, context_titles, context_docs)],
+        context_input = rag_model.retriever.generator_tokenizer.batch_encode_plus(
+            [(ct + rag_model.config.title_sep + cd + rag_model.config.doc_sep + q).replace("  ", " ") for q, ct, cd in qtd],
             max_length=rag_model.config.max_combined_length,
             return_tensors='pt',
             padding='max_length',
@@ -155,7 +155,7 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str], conte
 
         cinput_ids = context_input.input_ids.to(args.device)
         cattention_mask = context_input.attention_mask.to(args.device)
-        doc_score = torch.zeros(context_input.size(0), 1).to(args.device)
+        doc_score = torch.zeros(cinput_ids.size(0), 1).to(args.device)
         outputs = rag_model.generate(
             context_input_ids=cinput_ids,
             context_attention_mask=cattention_mask,
@@ -207,7 +207,7 @@ def get_args():
     )
     parser.add_argument(
         "--eval_mode",
-        choices=["e2e", "retrieval"],
+        choices=["e2e", "retrieval", "e2ec"],
         default="e2e",
         type=str,
         help="Evaluation mode, e2e calculates exact match and F1 of the downstream task, retrieval calculates precision@k.",
@@ -305,8 +305,15 @@ def main(args):
 
     logger.info("Evaluate the following checkpoints: %s", checkpoints)
 
-    score_fn = get_scores if args.eval_mode == "e2e" else get_precision_at_k
-    evaluate_batch_fn = evaluate_batch_e2e if args.eval_mode == "e2e" else evaluate_batch_retrieval
+    if args.eval_mode == "e2e":
+        evaluate_batch_fn = evaluate_batch_e2e
+        score_fn = get_scores
+    elif args.eval_mode == 'e2ec':
+        evaluate_batch_fn = evaluate_batch_e2e_with_context
+        score_fn = get_scores
+    else:
+        evaluate_batch_fn = evaluate_batch_retrieval
+        score_fn = get_precision_at_k
 
     for checkpoint in checkpoints:
         if os.path.exists(args.predictions_path) and (not args.recalculate):

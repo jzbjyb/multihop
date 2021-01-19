@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 
 model=facebook/rag-sequence-nq  # facebook/rag-sequence-base
-out=nq/rag_empty.pred  # nq/raginit_empty.pred
+out=hotpotqa/rag.pred  # nq/raginit_empty.pred
+mode=e2ec
+#source=nq/dev.source
+#target=nq/dev.target
+source=../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project.jsonl.source
+target=../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project.jsonl.target
 
 CUDA_VISIBLE_DEVICES=0 proxychains4 python eval_rag.py \
     --model_name_or_path ${model} \
     --model_type rag_sequence \
-    --evaluation_set nq/dev.source \
-    --gold_data_path nq/dev.target \
+    --evaluation_set ${source} \
+    --gold_data_path ${target} \
     --predictions_path ${out} \
-    --eval_mode e2e \
+    --eval_mode ${mode} \
     --gold_data_mode ans \
     --num_beams 1 \
     --n_docs 1 \
