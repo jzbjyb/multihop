@@ -1,5 +1,7 @@
 """ Evaluation script for RAG models."""
 
+from typing import List
+
 import argparse
 import ast
 import logging
@@ -42,14 +44,14 @@ def get_scores(args, preds_path, gold_data_path):
     hypos = [line.strip() for line in open(preds_path, "r").readlines()]
     answers = []
 
-    if args.gold_data_mode == "qa":
+    if args is None or args.gold_data_mode == "ans":
+        references = [line.strip() for line in open(gold_data_path, "r").readlines()]
+        answers = [[reference] for reference in references]
+    else:
         data = pd.read_csv(gold_data_path, sep="\t", header=None)
         for answer_list in data[1]:
             ground_truths = ast.literal_eval(answer_list)
             answers.append(ground_truths)
-    else:
-        references = [line.strip() for line in open(gold_data_path, "r").readlines()]
-        answers = [[reference] for reference in references]
 
     f1 = em = total = 0
     for prediction, ground_truths in zip(hypos, answers):
@@ -138,6 +140,40 @@ def evaluate_batch_e2e(args, rag_model, questions):
                 logger.info("Q: {} - A: {}".format(q, a))
 
         return answers
+
+
+def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str], context_titles: List[str], context_docs: List[str]):
+    with torch.no_grad():
+        context_input = rag_model.generator_tokenizer.batch_encode_plus(
+            [(ct + rag_model.config.title_sep + cd + rag_model.config.doc_sep + q).replace("  ", " ")
+             for q, ct, cd in zip(questions, context_titles, context_docs)],
+            max_length=rag_model.config.max_combined_length,
+            return_tensors='pt',
+            padding='max_length',
+            truncation=True,
+        )
+
+        cinput_ids = context_input.input_ids.to(args.device)
+        cattention_mask = context_input.attention_mask.to(args.device)
+        doc_score = torch.zeros(context_input.size(0), 1).to(args.device)
+        outputs = rag_model.generate(
+            context_input_ids=cinput_ids,
+            context_attention_mask=cattention_mask,
+            doc_scores=doc_score,
+            num_beams=args.num_beams,
+            min_length=args.min_length,
+            max_length=args.max_length,
+            early_stopping=False,
+            num_return_sequences=1,
+            bad_words_ids=[[0, 0]],  # BART likes to repeat BOS tokens, dont allow it to generate more than one
+        )
+        answers = rag_model.retriever.generator_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+
+    if args.print_predictions:
+        for q, a in zip(questions, answers):
+            logger.info("Q: {} - A: {}".format(q, a))
+
+    return answers
 
 
 def get_args():
