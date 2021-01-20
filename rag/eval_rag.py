@@ -143,10 +143,17 @@ def evaluate_batch_e2e(args, rag_model, questions):
 
 
 def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
-    qtd = [q.split('\t') for q in questions]
+    qtds = [q.split('\t') for q in questions]
+    def format_qtd(qtd):
+        if len(qtd) == 3:
+            q, ct, cd = qtd
+            return (ct + rag_model.config.title_sep + cd + rag_model.config.doc_sep + q).replace("  ", " ")
+        if len(qtd) == 1:
+            return qtd[0].replace("  ", " ")
+        raise NotImplementedError
     with torch.no_grad():
         context_input = rag_model.retriever.generator_tokenizer.batch_encode_plus(
-            [(ct + rag_model.config.title_sep + cd + rag_model.config.doc_sep + q).replace("  ", " ") for q, ct, cd in qtd],
+            [format_qtd(qtd) for qtd in qtds],
             max_length=rag_model.config.max_combined_length,
             return_tensors='pt',
             padding='max_length',
@@ -344,7 +351,7 @@ def main(args):
                     questions = []
             if len(questions) > 0:
                 answers = evaluate_batch_fn(args, model, questions)
-                preds_file.write("\n".join(answers))
+                preds_file.write("\n".join(answers) + '\n')
                 preds_file.flush()
 
             score_fn(args, args.predictions_path, args.gold_data_path)

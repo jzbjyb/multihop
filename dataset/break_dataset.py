@@ -7,7 +7,9 @@ from .hotpotqa import HoptopQA
 
 class Break(object):
   def __init__(self, root_dir: str):
+    print('loading Break ...')
     self.ops2count = defaultdict(lambda: 0)
+    self.train = self.load_split(os.path.join(root_dir, 'train.csv'))
     self.dev = self.load_split(os.path.join(root_dir, 'dev.csv'))
 
 

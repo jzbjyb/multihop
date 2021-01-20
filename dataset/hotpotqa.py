@@ -5,7 +5,8 @@ import json
 
 class HoptopQA(object):
   def __init__(self, root_dir):
-    for split, file in [('dev', 'hotpot_dev_distractor_v1.json')]:
+    print('loading hotpotqa ...')
+    for split, file in [('dev', 'hotpot_dev_distractor_v1.json'), ('train', 'hotpot_train_v1.1.json')]:
       file = os.path.join(root_dir, file)
       if not os.path.exists(file):
         continue
