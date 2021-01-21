@@ -4,13 +4,21 @@ export PYTHONPATH="../":"${PYTHONPATH}"
 # A sample finetuning run, you need to specify data_dir, output_dir and model_name_or_path
 # run ./examples/rag/finetune_rag.sh --help to see all the possible options
 
-python examples/rag/finetune_rag.py \
+DATA_DIR=nq_small
+MODEL_NAME_OR_PATH=facebook/rag-sequence-nq
+mode=$1
+OUTPUT_DIR=$2  # models/rag_combine
+gpus=$3
+ngpus=$4
+port=$5
+
+CUDA_VISIBLE_DEVICES=${gpus} python finetune_rag.py \
     --data_dir $DATA_DIR \
     --output_dir $OUTPUT_DIR \
     --model_name_or_path $MODEL_NAME_OR_PATH \
     --model_type rag_sequence \
     --fp16 \
-    --gpus 8 \
+    --gpus ${ngpus} \
     --profile \
     --do_train \
     --do_predict \
@@ -29,6 +37,8 @@ python examples/rag/finetune_rag.py \
     --max_grad_norm 0.1 \
     --lr_scheduler polynomial \
     --learning_rate 3e-05 \
-    --num_train_epochs 100 \
+    --num_train_epochs 1 \
     --warmup_steps 500 \
     --gradient_accumulation_steps 1 \
+    --retrieval_mode ${mode} \
+    --distributed-port ${port}

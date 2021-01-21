@@ -1,10 +1,19 @@
-from typing import Dict
+from typing import Dict, List
 from collections import defaultdict
 import argparse
 import json
 import numpy as np
 from dataset import Break, HoptopQA
 from rag.utils_rag import exact_match_score
+
+
+numhops2temps: Dict[int, List[str]] = {
+  2: ['n-*', 'p-*', '*-n', '*-p', 'n-n', 'n-p', 'p-n', 'p-p']
+}
+
+
+def nline_to_cate(nline: int, num_hops: int):
+  return numhops2temps[num_hops][nline % len(numhops2temps[num_hops])]
 
 
 if __name__ == '__main__':
@@ -46,8 +55,7 @@ if __name__ == '__main__':
   elif args.task == 'ana':
     pred_file, source_file, target_file = args.input
     ems = []
-    single = []
-    multihop = []
+    groups = []
     with open(pred_file, 'r') as pfin, open(source_file, 'r') as sfin, open(target_file, 'r') as tfin:
       for i, l in enumerate(pfin):
         pred = l.strip()
@@ -55,14 +63,13 @@ if __name__ == '__main__':
         target = tfin.readline().strip()
         em = exact_match_score(pred, target)
         ems.append(em)
-        if (i + 1) % (args.num_hops + 1) == 0:
-          multihop.append(em)
-          continue
-        if (i + 1) % (args.num_hops + 1) == 1:
-          single.append([])
-        single[-1].append(em)
+        if i % len(numhops2temps[args.num_hops]) == 0:
+          groups.append([])
+        groups[-1].append(em)
 
     cate: Dict[str, int] = defaultdict(lambda: 0)
+
+
     for sh, mh in zip(single, multihop):
       sh = np.sum(sh)
       cate['{:d}-{:d}'.format(sh, mh)] += 1

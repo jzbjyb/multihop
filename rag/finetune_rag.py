@@ -122,6 +122,7 @@ class GenerativeQAModule(BaseTransformer):
         else:
             self.model_class = T5ForConditionalGeneration
         self.is_rag_model = is_rag_model(hparams.model_type)
+        self.retrieval_mode = hparams.retrieval_mode
 
         config_class = RagConfig if self.is_rag_model else AutoConfig
         config = config_class.from_pretrained(hparams.model_name_or_path)
@@ -140,7 +141,8 @@ class GenerativeQAModule(BaseTransformer):
             config.label_smoothing = hparams.label_smoothing
             hparams, config.generator = set_extra_model_params(extra_model_params, hparams, config.generator)
             if hparams.distributed_retriever == "pytorch":
-                retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
+                retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))  # TODO: debug
+                #retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
             elif hparams.distributed_retriever == "ray":
                 # The Ray retriever needs the handles to the retriever actors.
                 retriever = RagRayDistributedRetriever.from_pretrained(
@@ -163,7 +165,7 @@ class GenerativeQAModule(BaseTransformer):
 
         super().__init__(hparams, config=config, tokenizer=tokenizer, model=model)
 
-        save_git_info(self.hparams.output_dir)
+        #save_git_info(self.hparams.output_dir)  # TODO: debug
         self.output_dir = Path(self.hparams.output_dir)
         self.metrics_save_path = Path(self.output_dir) / "metrics.json"
         self.hparams_save_path = Path(self.output_dir) / "hparams.pkl"
@@ -191,7 +193,7 @@ class GenerativeQAModule(BaseTransformer):
         assert self.target_lens["train"] <= self.target_lens["val"], f"target_lens: {self.target_lens}"
         assert self.target_lens["train"] <= self.target_lens["test"], f"target_lens: {self.target_lens}"
 
-        self.hparams.git_sha = get_git_info()["repo_sha"]
+        #self.hparams.git_sha = get_git_info()["repo_sha"]  # TODO: debug
         self.num_workers = hparams.num_workers
         self.distributed_port = self.hparams.distributed_port
 
@@ -205,8 +207,8 @@ class GenerativeQAModule(BaseTransformer):
 
         self.distributed_retriever = hparams.distributed_retriever
 
-    def forward(self, input_ids, **kwargs):
-        return self.model(input_ids, **kwargs)
+    def forward(self, input_ids=None, **kwargs):
+        return self.model(input_ids=input_ids, **kwargs)
 
     def ids_to_clean_text(self, generated_ids: List[int]):
         gen_text = self.tokenizer.batch_decode(
@@ -214,7 +216,7 @@ class GenerativeQAModule(BaseTransformer):
         )
         return lmap(str.strip, gen_text)
 
-    def _step(self, batch: dict) -> Tuple:
+    def _step(self, batch: dict, use_retrieval: bool=True) -> Tuple:
         source_ids, source_mask, target_ids = batch["input_ids"], batch["attention_mask"], batch["decoder_input_ids"]
 
         rag_kwargs = {}
@@ -244,14 +246,26 @@ class GenerativeQAModule(BaseTransformer):
 
         assert decoder_input_ids is not None
 
-        outputs = self(
-            source_ids,
-            attention_mask=source_mask,
-            decoder_input_ids=decoder_input_ids,
-            use_cache=False,
-            labels=lm_labels,
-            **rag_kwargs,
-        )
+        if self.is_rag_model and not use_retrieval:
+            outputs = self(
+                context_input_ids=source_ids,
+                context_attention_mask=source_mask,
+                doc_scores=source_ids.new_zeros(source_ids.size(0), 1).float(),
+                decoder_input_ids=decoder_input_ids,
+                use_cache=False,
+                labels=lm_labels,
+                n_docs=1,
+                **rag_kwargs,
+            )
+        else:
+            outputs = self(
+                source_ids,
+                attention_mask=source_mask,
+                decoder_input_ids=decoder_input_ids,
+                use_cache=False,
+                labels=lm_labels,
+                **rag_kwargs,
+            )
 
         loss = outputs["loss"]
         return (loss,)
@@ -261,7 +275,16 @@ class GenerativeQAModule(BaseTransformer):
         raise NotImplementedError("pad not implemented")
 
     def training_step(self, batch, batch_idx) -> Dict:
-        loss_tensors = self._step(batch)
+        if self.retrieval_mode == 'ret':
+            loss_tensors = self._step(batch, use_retrieval=True)
+        elif self.retrieval_mode == 'no':
+            loss_tensors = self._step(batch, use_retrieval=False)
+        elif self.retrieval_mode == 'combine':
+            loss_tensors1 = self._step(batch, use_retrieval=True)
+            loss_tensors2 = self._step(batch, use_retrieval=False)
+            loss_tensors = (loss_tensors1[0] + loss_tensors2[0],)
+        else:
+            raise NotImplementedError
 
         logs = {name: loss for name, loss in zip(self.loss_names, loss_tensors)}
         # tokens per batch
@@ -282,7 +305,11 @@ class GenerativeQAModule(BaseTransformer):
         return {"loss": loss_tensors[0], "log": logs}
 
     def validation_step(self, batch, batch_idx) -> Dict:
-        return self._generative_step(batch)
+        if self.retrieval_mode in {'ret', 'combine'}:
+            return self._generative_step(batch, use_retrieval=True)
+        if self.retrieval_mode == 'no':
+            return self._generative_step(batch, use_retrieval=False)
+        raise NotImplementedError
 
     def validation_epoch_end(self, outputs, prefix="val") -> Dict:
         self.step_count += 1
@@ -314,22 +341,33 @@ class GenerativeQAModule(BaseTransformer):
     def calc_generative_metrics(self, preds, target) -> Dict:
         return calculate_exact_match(preds, target)
 
-    def _generative_step(self, batch: dict) -> dict:
+    def _generative_step(self, batch: dict, use_retrieval: bool=True) -> dict:
         start_time = time.time()
         batch = BatchEncoding(batch).to(device=self.model.device)
-        generated_ids = self.model.generate(
-            batch["input_ids"],
-            attention_mask=batch["attention_mask"],
-            do_deduplication=False,  # rag specific parameter
-            use_cache=True,
-            min_length=1,
-            max_length=self.target_lens["val"],
-        )
+        if use_retrieval:
+            generated_ids = self.model.generate(
+                batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                do_deduplication=False,  # rag specific parameter
+                use_cache=True,
+                min_length=1,
+                max_length=self.target_lens["val"],
+            )
+        else:
+            generated_ids = self.model.generate(
+                context_input_ids=batch["input_ids"],
+                context_attention_mask=batch["attention_mask"],
+                doc_scores=batch["input_ids"].new_zeros(batch["input_ids"].size(0), 1).float(),
+                do_deduplication=False,  # rag specific parameter
+                use_cache=True,
+                min_length=1,
+                max_length=self.target_lens["val"],
+            )
 
         gen_time = (time.time() - start_time) / batch["input_ids"].shape[0]
         preds: List[str] = self.ids_to_clean_text(generated_ids)
         target: List[str] = self.ids_to_clean_text(batch["decoder_input_ids"])
-        loss_tensors = self._step(batch)
+        loss_tensors = self._step(batch, use_retrieval=use_retrieval)
         base_metrics = {name: loss for name, loss in zip(self.loss_names, loss_tensors)}
         gen_metrics: Dict = self.calc_generative_metrics(preds, target)
 
@@ -338,7 +376,11 @@ class GenerativeQAModule(BaseTransformer):
         return base_metrics
 
     def test_step(self, batch, batch_idx):
-        return self._generative_step(batch)
+        if self.retrieval_mode in {'ret', 'combine'}:
+            return self._generative_step(batch, use_retrieval=True)
+        if self.retrieval_mode == 'no':
+            return self._generative_step(batch, use_retrieval=False)
+        raise NotImplementedError
 
     def test_epoch_end(self, outputs):
         return self.validation_epoch_end(outputs, prefix="test")
@@ -484,6 +526,12 @@ class GenerativeQAModule(BaseTransformer):
             type=bool,
             default=False,
             help="Whether to use the dummy version of the dataset index. More info about custom indexes in the RagRetriever documentation as well as in `examples/rag/use_own_knowledge_dataset.py`",
+        )
+        parser.add_argument(
+            '--retrieval_mode',
+            type=str,
+            choices=['ret', 'no', 'combine'],
+            default='ret'
         )
         return parser
 
