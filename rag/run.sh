@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
-mode=e2ec
-model=facebook/rag-sequence-nq  # facebook/rag-sequence-base
-#source=nq/dev.source
-#target=nq/dev.target
-source=$1  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project.jsonl.source
-target=$2  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project.jsonl.target
+mode=$1  # e2ec
+model=$2  # facebook/rag-sequence-nq facebook/rag-sequence-base
+source=nq/test.source
+target=nq/test.target
+#source=$1  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project.jsonl.source
+#target=$2  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project.jsonl.target
 out=$3  # hotpotqa/dev_select_project.pred
 gpu=$4
 

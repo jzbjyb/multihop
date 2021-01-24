@@ -12,7 +12,7 @@ gpus=$3
 ngpus=$4
 port=$5
 
-CUDA_VISIBLE_DEVICES=${gpus} python finetune_rag.py \
+CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --data_dir $DATA_DIR \
     --output_dir $OUTPUT_DIR \
     --model_name_or_path $MODEL_NAME_OR_PATH \

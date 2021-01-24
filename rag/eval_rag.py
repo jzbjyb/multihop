@@ -11,6 +11,7 @@ import sys
 import pandas as pd
 import torch
 from tqdm import tqdm
+from collections import defaultdict
 
 from transformers import BartForConditionalGeneration, RagRetriever, RagSequenceForGeneration, RagTokenForGeneration
 from transformers import logging as transformers_logging
@@ -40,7 +41,7 @@ def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
     return max(metric_fn(prediction, gt) for gt in ground_truths)
 
 
-def get_scores(args, preds_path, gold_data_path):
+def get_scores(args, preds_path, gold_data_path, question_data_path=None):
     hypos = [line.strip() for line in open(preds_path, "r").readlines()]
     answers = []
 
@@ -53,14 +54,21 @@ def get_scores(args, preds_path, gold_data_path):
             ground_truths = ast.literal_eval(answer_list)
             answers.append(ground_truths)
 
-    f1 = em = total = 0
-    for prediction, ground_truths in zip(hypos, answers):
-        total += 1
-        em += metric_max_over_ground_truths(exact_match_score, prediction, ground_truths)
-        f1 += metric_max_over_ground_truths(f1_score, prediction, ground_truths)
+    if question_data_path:
+        questions = [line.strip() for line in open(question_data_path, 'r').readlines()]
+    else:
+        questions = list(range(len(answers)))
 
-    em = 100.0 * em / total
-    f1 = 100.0 * f1 / total
+    q2em = defaultdict(lambda: 0)
+    q2f1 = defaultdict(lambda: 0)
+    for prediction, ground_truths, question in zip(hypos, answers, questions):
+        em = metric_max_over_ground_truths(exact_match_score, prediction, ground_truths)
+        f1 = metric_max_over_ground_truths(f1_score, prediction, ground_truths)
+        q2em[question] = max(q2em[question], em)
+        q2f1[question] = max(q2f1[question], f1)
+
+    em = 100.0 * sum(q2em.values()) / len(q2em)
+    f1 = 100.0 * sum(q2f1.values()) / len(q2f1)
 
     logger.info(f"F1: {f1:.2f}")
     logger.info(f"EM: {em:.2f}")
@@ -333,7 +341,8 @@ def main(args):
         logger.info("  Predictions will be stored under {}".format(args.predictions_path))
 
         if args.model_type.startswith("rag"):
-            retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
+            #retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
+            retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
             model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
         else:
