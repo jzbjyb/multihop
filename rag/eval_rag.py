@@ -180,6 +180,7 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
             max_length=args.max_length,
             early_stopping=False,
             num_return_sequences=1,
+            n_docs=1,
             bad_words_ids=[[0, 0]],  # BART likes to repeat BOS tokens, dont allow it to generate more than one
         )
         answers = rag_model.retriever.generator_tokenizer.batch_decode(outputs, skip_special_tokens=True)

@@ -18,7 +18,7 @@ def nline_to_cate(nline: int, num_hops: int):
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['hotpotqa', 'ana'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['hotpotqa', 'ana', 'nq'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -99,3 +99,30 @@ if __name__ == '__main__':
 
     for case in cases_show[:10]:
       print(case)
+
+  elif args.task == 'nq':
+    def read_file(in_fname, dir, split, first_ans=False):
+      with open(in_fname) as fin, open(f'{dir}/{split}.source', 'w') as sfile, open(f'{dir}/{split}.target', 'w') as tfile:
+        json_file = json.load(fin)
+        size = 0
+        for i, item in enumerate(json_file):
+          id = item['id']
+          question = item['question'].replace('\t', ' ').replace('\n', ' ')
+          if '?' not in question:
+            question += '?'
+          answers = [answer.replace('\t', ' ').replace('\n', ' ') for answer in item['answer']]
+          if first_ans:
+            sfile.write(f'{question}\n')
+            tfile.write(f'{answers[0]}\n')
+            size += 1
+          else:
+            for answer in answers:
+              sfile.write(f'{question}\n')
+              tfile.write(f'{answer}\n')
+              size += 1
+      return size
+
+    count_test = read_file('rag/nq_raw/nqopen/nqopen-test.json', 'rag/nq_raw', 'test', first_ans=True)
+    count_dev = read_file('rag/nq_raw/nqopen/nqopen-dev.json', 'rag/nq_raw', 'val', first_ans=True)
+    count_train = read_file('rag/nq_raw/nqopen/nqopen-train.json', 'rag/nq_raw', 'train', first_ans=True)
+    print('train {} val {} test {}'.format(count_train, count_dev, count_test))

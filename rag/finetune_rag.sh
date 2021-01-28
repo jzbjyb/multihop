@@ -4,7 +4,7 @@ export PYTHONPATH="../":"${PYTHONPATH}"
 # A sample finetuning run, you need to specify data_dir, output_dir and model_name_or_path
 # run ./examples/rag/finetune_rag.sh --help to see all the possible options
 
-DATA_DIR=nq_small
+DATA_DIR=nq_raw_small
 MODEL_NAME_OR_PATH=facebook/rag-sequence-nq
 mode=$1
 OUTPUT_DIR=$2  # models/rag_combine

@@ -308,7 +308,7 @@ class GenerativeQAModule(BaseTransformer):
         if self.retrieval_mode in {'ret', 'combine'}:
             return self._generative_step(batch, use_retrieval=True)
         if self.retrieval_mode == 'no':
-            return self._generative_step(batch, use_retrieval=False)
+            return self._generative_step(batch, use_retrieval=True)  # TODO: debug
         raise NotImplementedError
 
     def validation_epoch_end(self, outputs, prefix="val") -> Dict:
@@ -379,7 +379,7 @@ class GenerativeQAModule(BaseTransformer):
         if self.retrieval_mode in {'ret', 'combine'}:
             return self._generative_step(batch, use_retrieval=True)
         if self.retrieval_mode == 'no':
-            return self._generative_step(batch, use_retrieval=False)
+            return self._generative_step(batch, use_retrieval=True)  # TODO: debug
         raise NotImplementedError
 
     def test_epoch_end(self, outputs):
