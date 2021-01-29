@@ -94,14 +94,19 @@ class Seq2SeqDataset(Dataset):
         target_tokenizer = self.tokenizer.generator if isinstance(self.tokenizer, RagTokenizer) else self.tokenizer
 
         source_inputs = encode_line(source_tokenizer, source_line, self.max_source_length, "right")
+        source_inputs_for_decoder = encode_line(target_tokenizer, source_line, self.max_source_length, "right")
         target_inputs = encode_line(target_tokenizer, tgt_line, self.max_target_length, "right")
 
         source_ids = source_inputs["input_ids"].squeeze()
-        target_ids = target_inputs["input_ids"].squeeze()
         src_mask = source_inputs["attention_mask"].squeeze()
+        source_ids_for_decoder = source_inputs_for_decoder["input_ids"].squeeze()
+        src_mask_for_decoder = source_inputs_for_decoder["attention_mask"].squeeze()
+        target_ids = target_inputs["input_ids"].squeeze()
         return {
             "input_ids": source_ids,
             "attention_mask": src_mask,
+            "input_ids_for_decoder": source_ids_for_decoder,
+            "attention_mask_for_decoder": src_mask_for_decoder,
             "decoder_input_ids": target_ids,
         }
 
@@ -112,6 +117,8 @@ class Seq2SeqDataset(Dataset):
     def collate_fn(self, batch) -> Dict[str, torch.Tensor]:
         input_ids = torch.stack([x["input_ids"] for x in batch])
         masks = torch.stack([x["attention_mask"] for x in batch])
+        input_ids_for_decoder = torch.stack([x["input_ids_for_decoder"] for x in batch])
+        masks_for_decoder = torch.stack([x["attention_mask_for_decoder"] for x in batch])
         target_ids = torch.stack([x["decoder_input_ids"] for x in batch])
         tgt_pad_token_id = (
             self.tokenizer.generator.pad_token_id
@@ -125,9 +132,12 @@ class Seq2SeqDataset(Dataset):
         )
         y = trim_batch(target_ids, tgt_pad_token_id)
         source_ids, source_mask = trim_batch(input_ids, src_pad_token_id, attention_mask=masks)
+        source_ids_fd, source_mask_fd = trim_batch(input_ids_for_decoder, tgt_pad_token_id, attention_mask=masks_for_decoder)
         batch = {
             "input_ids": source_ids,
             "attention_mask": source_mask,
+            "input_ids_for_decoder": source_ids_fd,
+            "attention_mask_for_decoder": source_mask_fd,
             "decoder_input_ids": y,
         }
         return batch

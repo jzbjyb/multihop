@@ -218,6 +218,7 @@ class GenerativeQAModule(BaseTransformer):
 
     def _step(self, batch: dict, use_retrieval: bool=True) -> Tuple:
         source_ids, source_mask, target_ids = batch["input_ids"], batch["attention_mask"], batch["decoder_input_ids"]
+        source_ids_fd, source_mask_fd = batch["input_ids_for_decoder"], batch["attention_mask_for_decoder"]
 
         rag_kwargs = {}
         if isinstance(self.model, T5ForConditionalGeneration):
@@ -248,8 +249,8 @@ class GenerativeQAModule(BaseTransformer):
 
         if self.is_rag_model and not use_retrieval:
             outputs = self(
-                context_input_ids=source_ids,
-                context_attention_mask=source_mask,
+                context_input_ids=source_ids_fd,
+                context_attention_mask=source_mask_fd,
                 doc_scores=source_ids.new_zeros(source_ids.size(0), 1).float(),
                 decoder_input_ids=decoder_input_ids,
                 use_cache=False,
@@ -355,9 +356,9 @@ class GenerativeQAModule(BaseTransformer):
             )
         else:
             generated_ids = self.model.generate(
-                context_input_ids=batch["input_ids"],
-                context_attention_mask=batch["attention_mask"],
-                doc_scores=batch["input_ids"].new_zeros(batch["input_ids"].size(0), 1).float(),
+                context_input_ids=batch["input_ids_for_decoder"],
+                context_attention_mask=batch["attention_mask_for_decoder"],
+                doc_scores=batch["input_ids_for_decoder"].new_zeros(batch["input_ids_for_decoder"].size(0), 1).float(),
                 do_deduplication=False,  # rag specific parameter
                 use_cache=True,
                 min_length=1,
