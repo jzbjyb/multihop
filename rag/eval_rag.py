@@ -19,6 +19,7 @@ from transformers import logging as transformers_logging
 
 sys.path.append(os.path.join(os.getcwd()))  # noqa: E402 # isort:skip
 from utils_rag import exact_match_score, f1_score  # noqa: E402 # isort:skip
+from rag_model import MyRagSequenceForGeneration
 
 
 logger = logging.getLogger(__name__)
@@ -48,11 +49,13 @@ def get_scores(args, preds_path, gold_data_path, question_data_path=None):
     if args is None or args.gold_data_mode == "ans":
         references = [line.strip() for line in open(gold_data_path, "r").readlines()]
         answers = [[reference] for reference in references]
-    else:
+    elif args.gold_data_mode == "qa":
         data = pd.read_csv(gold_data_path, sep="\t", header=None)
         for answer_list in data[1]:
             ground_truths = ast.literal_eval(answer_list)
             answers.append(ground_truths)
+    elif args.gold_data_mode == 'ans_tab':
+        answers = [line.rstrip('\n').split('\t') for line in open(gold_data_path, 'r')]
 
     if question_data_path:
         questions = [line.strip() for line in open(question_data_path, 'r').readlines()]
@@ -131,7 +134,7 @@ def evaluate_batch_e2e(args, rag_model, questions):
 
         input_ids = inputs_dict.input_ids.to(args.device)
         attention_mask = inputs_dict.attention_mask.to(args.device)
-        outputs = rag_model.generate(  # rag_model overwrites generate
+        outputs, logprobs = rag_model.generate(  # rag_model overwrites generate
             input_ids,
             attention_mask=attention_mask,
             num_beams=args.num_beams,
@@ -147,7 +150,7 @@ def evaluate_batch_e2e(args, rag_model, questions):
             for q, a in zip(questions, answers):
                 logger.info("Q: {} - A: {}".format(q, a))
 
-        return answers
+        return answers, logprobs.cpu().numpy()
 
 
 def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
@@ -171,7 +174,7 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
         cinput_ids = context_input.input_ids.to(args.device)
         cattention_mask = context_input.attention_mask.to(args.device)
         doc_score = torch.zeros(cinput_ids.size(0), 1).to(args.device)
-        outputs = rag_model.generate(
+        outputs, logprobs = rag_model.generate(
             context_input_ids=cinput_ids,
             context_attention_mask=cattention_mask,
             doc_scores=doc_score,
@@ -189,7 +192,7 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
         for q, a in zip(questions, answers):
             logger.info("Q: {} - A: {}".format(q, a))
 
-    return answers
+    return answers, logprobs.cpu().numpy()
 
 
 def get_args():
@@ -247,9 +250,10 @@ def get_args():
         "--gold_data_mode",
         default="qa",
         type=str,
-        choices=["qa", "ans"],
+        choices=["qa", "ans_tab", "ans"],
         help="Format of the gold data file"
         "qa - a single line in the following format: question [tab] answer_list"
+        "ans_tab - a single line in the following format: answers separated by tabs"
         "ans - a single line of the gold file contains the expected answer string",
     )
     parser.add_argument(
@@ -304,7 +308,7 @@ def main(args):
         args.model_type = infer_model_type(args.model_name_or_path)
         assert args.model_type is not None
     if args.model_type.startswith("rag"):
-        model_class = RagTokenForGeneration if args.model_type == "rag_token" else RagSequenceForGeneration
+        model_class = RagTokenForGeneration if args.model_type == "rag_token" else MyRagSequenceForGeneration
         model_kwargs["n_docs"] = args.n_docs
         if args.index_name is not None:
             model_kwargs["index_name"] = args.index_name
@@ -342,8 +346,8 @@ def main(args):
         logger.info("  Predictions will be stored under {}".format(args.predictions_path))
 
         if args.model_type.startswith("rag"):
-            #retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
-            retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
+            retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
+            #retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
             model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
         else:
@@ -355,13 +359,13 @@ def main(args):
             for line in tqdm(eval_file):
                 questions.append(line.strip())
                 if len(questions) == args.eval_batch_size:
-                    answers = evaluate_batch_fn(args, model, questions)
-                    preds_file.write("\n".join(answers) + "\n")
+                    answers, logprobs = evaluate_batch_fn(args, model, questions)
+                    preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                     preds_file.flush()
                     questions = []
             if len(questions) > 0:
-                answers = evaluate_batch_fn(args, model, questions)
-                preds_file.write("\n".join(answers) + '\n')
+                answers, logprobs = evaluate_batch_fn(args, model, questions)
+                preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                 preds_file.flush()
 
             score_fn(args, args.predictions_path, args.gold_data_path)

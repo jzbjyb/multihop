@@ -101,7 +101,7 @@ if __name__ == '__main__':
       print(case)
 
   elif args.task == 'nq':
-    def read_file(in_fname, dir, split, first_ans=False):
+    def read_file(in_fname, dir, split, ans_format='first'):
       with open(in_fname) as fin, open(f'{dir}/{split}.source', 'w') as sfile, open(f'{dir}/{split}.target', 'w') as tfile:
         json_file = json.load(fin)
         size = 0
@@ -111,18 +111,22 @@ if __name__ == '__main__':
           if '?' not in question:
             question += '?'
           answers = [answer.replace('\t', ' ').replace('\n', ' ') for answer in item['answer']]
-          if first_ans:
+          if ans_format == 'first':
             sfile.write(f'{question}\n')
             tfile.write(f'{answers[0]}\n')
             size += 1
-          else:
+          elif ans_format == 'multi':
             for answer in answers:
               sfile.write(f'{question}\n')
               tfile.write(f'{answer}\n')
               size += 1
+          elif ans_format == 'single':
+            sfile.write(f'{question}\n')
+            tfile.write('\t'.join(answers) + '\n')
+            size += len(answers)
       return size
 
-    count_test = read_file('rag/nq_raw/nqopen/nqopen-test.json', 'rag/nq_raw', 'test', first_ans=True)
-    count_dev = read_file('rag/nq_raw/nqopen/nqopen-dev.json', 'rag/nq_raw', 'val', first_ans=True)
-    count_train = read_file('rag/nq_raw/nqopen/nqopen-train.json', 'rag/nq_raw', 'train', first_ans=True)
+    count_test = read_file('rag/nq_raw/nqopen/nqopen-test.json', 'rag/nq_raw', 'test', ans_format='single')
+    count_dev = read_file('rag/nq_raw/nqopen/nqopen-dev.json', 'rag/nq_raw', 'val', ans_format='single')
+    count_train = read_file('rag/nq_raw/nqopen/nqopen-train.json', 'rag/nq_raw', 'train', ans_format='first')
     print('train {} val {} test {}'.format(count_train, count_dev, count_test))
