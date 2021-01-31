@@ -346,8 +346,10 @@ def main(args):
         logger.info("  Predictions will be stored under {}".format(args.predictions_path))
 
         if args.model_type.startswith("rag"):
-            retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
-            #retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
+            if args.eval_mode == 'e2ec':
+                retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
+            else:
+                retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
             model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
         else:
