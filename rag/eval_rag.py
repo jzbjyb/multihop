@@ -43,10 +43,12 @@ def metric_max_over_ground_truths(metric_fn, prediction, ground_truths):
 
 
 def get_scores(args, preds_path, gold_data_path, question_data_path=None):
-    hypos = [line.strip() for line in open(preds_path, "r").readlines()]
+    hypos = [line.rstrip('\n').split('\t')[0] for line in open(preds_path, "r").readlines()]
     answers = []
 
-    if args is None or args.gold_data_mode == "ans":
+    if args is None or args.gold_data_mode == 'ans_tab':
+        answers = [line.rstrip('\n').split('\t') for line in open(gold_data_path, 'r')]
+    elif args.gold_data_mode == "ans":
         references = [line.strip() for line in open(gold_data_path, "r").readlines()]
         answers = [[reference] for reference in references]
     elif args.gold_data_mode == "qa":
@@ -54,8 +56,6 @@ def get_scores(args, preds_path, gold_data_path, question_data_path=None):
         for answer_list in data[1]:
             ground_truths = ast.literal_eval(answer_list)
             answers.append(ground_truths)
-    elif args.gold_data_mode == 'ans_tab':
-        answers = [line.rstrip('\n').split('\t') for line in open(gold_data_path, 'r')]
 
     if question_data_path:
         questions = [line.strip() for line in open(question_data_path, 'r').readlines()]
@@ -79,7 +79,7 @@ def get_scores(args, preds_path, gold_data_path, question_data_path=None):
 
 def get_precision_at_k(args, preds_path, gold_data_path):
     k = args.k
-    hypos = [line.strip() for line in open(preds_path, "r").readlines()]
+    hypos = [line.rstrip('\n').split('\t')[0] for line in open(preds_path, "r").readlines()]
     references = [line.strip() for line in open(gold_data_path, "r").readlines()]
 
     em = total = 0

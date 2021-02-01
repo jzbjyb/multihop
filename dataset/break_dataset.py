@@ -8,7 +8,7 @@ from .hotpotqa import HoptopQA
 class Break(object):
   def __init__(self, root_dir: str):
     print('loading Break ...')
-    self.ops2count = defaultdict(lambda: 0)
+    self.ops2count = defaultdict(lambda: defaultdict(lambda: 0))
     self.train = self.load_split(os.path.join(root_dir, 'train.csv'))
     self.dev = self.load_split(os.path.join(root_dir, 'dev.csv'))
 
@@ -20,7 +20,8 @@ class Break(object):
       for row in bfin_csv:
         decomp = list(map(lambda x: x.strip(), row['decomposition'].split(';')))
         ops = '-'.join(eval(row['operators']))
-        self.ops2count[ops] += 1
+        domain = row['question_id'].split('_', 1)[0].lower()
+        self.ops2count[domain][ops] += 1
         entry = {
           'question_id': row['question_id'],
           'question_text': row['question_text'],

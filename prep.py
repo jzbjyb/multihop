@@ -4,7 +4,8 @@ import argparse
 import json
 import numpy as np
 from dataset import Break, HoptopQA
-from rag.utils_rag import exact_match_score
+from rag.utils_rag import exact_match_score, f1_score
+from rag.eval_rag import get_scores
 
 
 numhops2temps: Dict[int, List[str]] = {
@@ -16,38 +17,59 @@ def nline_to_cate(nline: int, num_hops: int):
   return numhops2temps[num_hops][nline % len(numhops2temps[num_hops])]
 
 
+def adaptive(pred1: str, pred2: str, gold_file: str, thres: float=0.0):
+  em = f1 = total = 0
+  with open(pred1, 'r') as p1fin, open(pred2, 'r') as p2fin, open(gold_file, 'r') as gfin:
+    for line in p1fin:
+      pred1, prob1 = line.rstrip('\n').split('\t')
+      pred2, prob2 = p2fin.readline().rstrip('\n').split('\t')
+      prob1, prob2 = float(prob1), float(prob2)
+      golds = gfin.readline().rstrip('\n').split('\t')
+      pred = pred1 if prob1 >= thres else pred2
+      em += max(exact_match_score(pred, g) for g in golds)
+      f1 += max(f1_score(pred, g) for g in golds)
+      total += 1
+  print('em {:.2f} f1 {:.2f} total {}'.format(em / total * 100, f1 / total * 100, total))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['hotpotqa', 'ana', 'nq'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'ana', 'nq', 'ada'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
   parser.add_argument('--num_hops', type=int, default=2)
+  parser.add_argument('--no_context', action='store_true')
   args = parser.parse_args()
 
-  if args.task == 'hotpotqa':
+  if args.task == 'eval':
+    get_scores(None, preds_path=args.input[0], gold_data_path=args.input[1], question_data_path=args.input[2])
+
+  elif args.task == 'hotpotqa':
     break_dataset = Break('/home/jzb/exp/Break/break_dataset/QDMR-high-level')
+    print(sorted(break_dataset.ops2count['hotpot'].items(), key=lambda x: -x[1]))
     hotpotqa = HoptopQA('/home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa')
 
     with open(args.output, 'w') as fout, open(args.output + '.source', 'w') as sfout, open(args.output + '.target', 'w') as tfout:
       for de in break_dataset.get_hotpotqa(hotpotqa, split=args.split):
         fout.write(json.dumps(de) + '\n')
         for sh in de['single-hop']:
-          # use retrieval
-          sfout.write('{}\t{}\t{}\n'.format(sh['q'], sh['c'][0], sh['c'][1]))
-          tfout.write('{}\n'.format(sh['a']))
+          if not args.no_context:  # use retrieval
+            sfout.write('{}\t{}\t{}\n'.format(sh['q'], sh['c'][0], sh['c'][1]))
+            tfout.write('{}\n'.format(sh['a']))
           # no retrieval
           sfout.write('{}\n'.format(sh['q']))
           tfout.write('{}\n'.format(sh['a']))
         mh = de['multi-hop']
-        # use all retrieval
-        sfout.write('{}\t{}\t{}\n'.format(mh['q'], ' '.join([c[0] for c in mh['c']]), ' '.join([c[1] for c in mh['c']])))
-        tfout.write('{}\n'.format(mh['a']))
-        # use one retrieval
-        sfout.write('{}\t{}\t{}\n'.format(mh['q'], mh['c'][0][0], mh['c'][0][1]))
-        tfout.write('{}\n'.format(mh['a']))
-        sfout.write('{}\t{}\t{}\n'.format(mh['q'], mh['c'][1][0], mh['c'][1][1]))
-        tfout.write('{}\n'.format(mh['a']))
+        if not args.no_context:
+          # use all retrieval
+          sfout.write('{}\t{}\t{}\n'.format(mh['q'], ' '.join([c[0] for c in mh['c']]), ' '.join([c[1] for c in mh['c']])))
+          tfout.write('{}\n'.format(mh['a']))
+          # use one retrieval
+          sfout.write('{}\t{}\t{}\n'.format(mh['q'], mh['c'][0][0], mh['c'][0][1]))
+          tfout.write('{}\n'.format(mh['a']))
+          sfout.write('{}\t{}\t{}\n'.format(mh['q'], mh['c'][1][0], mh['c'][1][1]))
+          tfout.write('{}\n'.format(mh['a']))
         # use no retrieval
         sfout.write('{}\n'.format(mh['q']))
         tfout.write('{}\n'.format(mh['a']))
@@ -130,3 +152,6 @@ if __name__ == '__main__':
     count_dev = read_file('rag/nq_raw/nqopen/nqopen-dev.json', 'rag/nq_raw', 'val', ans_format='single')
     count_train = read_file('rag/nq_raw/nqopen/nqopen-train.json', 'rag/nq_raw', 'train', ans_format='first')
     print('train {} val {} test {}'.format(count_train, count_dev, count_test))
+
+  elif args.task == 'ada':
+    adaptive(pred1=args.input[0], pred2=args.input[1], gold_file=args.input[2], thres=0.0)
