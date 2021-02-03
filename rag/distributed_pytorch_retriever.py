@@ -129,7 +129,7 @@ class RagPyTorchDistributedRetriever(RagRetriever):
         if self._is_main():
             assert len(gather_list) == world_size
             ids, vectors = self._main_retrieve(torch.cat(gather_list).numpy(), n_docs)
-            ids, vectors = torch.tensor(ids), torch.tensor(vectors)
+            ids, vectors = torch.tensor(ids), torch.tensor(vectors).float()  # TODO: avoid bus error
             scatter_ids = self._chunk_tensor(ids, n_queries)
             scatter_vectors = self._chunk_tensor(vectors, n_queries)
         doc_ids = self._scattered(scatter_ids, [n_queries, n_docs], target_type=torch.int64)

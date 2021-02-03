@@ -101,6 +101,7 @@ class CustomAccel(DDPAccelerator):
                 # For the Ray retriever, only initialize it once when global
                 # rank is 0.
                 module.model.rag.retriever.init_retrieval()
+            module.model.rag.retriever.index.dataset._format_type = None  # TODO: avoid bus error
 
 
 class GenerativeQAModule(BaseTransformer):
@@ -204,6 +205,7 @@ class GenerativeQAModule(BaseTransformer):
                 self.model.retriever.init_retrieval()
             elif hparams.distributed_retriever == "pytorch":
                 self.model.retriever.init_retrieval(self.distributed_port)
+            self.model.retriever.index.dataset._format_type = None  # TODO: avoid bus error
 
         self.distributed_retriever = hparams.distributed_retriever
 

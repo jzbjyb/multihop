@@ -352,6 +352,7 @@ def main(args):
                 retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
             model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
+            model.retriever.index.dataset._format_type = None  # TODO: avoid bus error
         else:
             model = model_class.from_pretrained(checkpoint, **model_kwargs)
         model.to(args.device)
