@@ -12,8 +12,8 @@ from rag.eval_rag import get_scores
 
 
 numhops2temps: Dict[int, List[str]] = {
-  2: ['n-*', 'p-*', '*-n', '*-p', 'n-n', 'n-p', 'p-n', 'p-p']
-  #2: ['n-*', '*-n', 'n-n']
+  #2: ['n-*', 'p-*', '*-n', '*-p', 'n-n', 'n-p', 'p-n', 'p-p']
+  2: ['n-*', '*-n', 'n-n']
 }
 
 
@@ -124,50 +124,85 @@ if __name__ == '__main__':
         s = s.split('\t')[0]
         print(s, t, p)
 
-    pred_file, source_file, target_file = args.input
+    def printstat(stats: Dict, norm: bool=False, intable: bool=True):
+      for cate, stat in stats.items():
+        print('-> {}'.format(cate))
+        t = sum(stat.values())
+        if norm:
+          stat = {k: '{:.2f}%'.format(v / t * 100) for k, v in stat.items()}
+        if intable:
+          sh, mh = list(stat.keys())[0].split('-')
+          sh, mh = len(sh), len(mh)
+          for i in np.array(np.meshgrid(*[[0, 1] for _ in range(sh + mh)])).T.reshape(-1, sh + mh):
+            i = ''.join(map(str, i[:sh])) + '-' + ''.join(map(str, i[sh:]))
+            if i not in stat:
+              stat[i] = 0
+          stat = sorted(stat.items())
+          for i, (k, v) in enumerate(stat):
+            if i % 2 == 0:
+              print('{}'.format(v), end='')
+            else:
+              print('\t{}'.format(v), end='\n')
+        else:
+          stat = sorted(stat.items())
+          print(stat)
+
+    pred_file, source_file, target_file, add_file = args.input
     ems = []
     groups = []
     cases = []
+    cates = []
 
-    with open(pred_file, 'r') as pfin, open(source_file, 'r') as sfin, open(target_file, 'r') as tfin:
+    addtion_res = None
+    if 'cwq' in pred_file:
+      addtion_res = ComplexWebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/complexwebq',
+                                       webq=WebQeustion('/home/jzb/exp/Break/break_dataset/QDMR/webqsp'))
+
+    with open(pred_file, 'r') as pfin, open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(add_file, 'r') as afin:
       for i, l in enumerate(pfin):
         pred = l.rstrip('\n').split('\t')[0]
         source = sfin.readline().strip()
         targets = tfin.readline().rstrip('\n').split('\t')
+        addition = afin.readline().rstrip('\n')
         em = max(exact_match_score(pred, target) for target in targets)
         ems.append(em)
         if i % len(numhops2temps[args.num_hops]) == 0:
           groups.append([])
           cases.append([])
+          if addtion_res is not None:
+            cates.append(addtion_res[addition]['type'])
+          else:
+            cates.append('')
         groups[-1].append(em)
         if numhops2temps[args.num_hops][i % len(numhops2temps[args.num_hops])] in {'n-*', '*-n', 'n-n'}:
           cases[-1].append((source, targets, pred))
     temps = numhops2temps[args.num_hops]
     groups = [dict(zip(temps, group)) for group in groups]
 
-    non_cate: Dict[str, int] = defaultdict(lambda: 0)
-    para_cate: Dict[str, int] = defaultdict(lambda: 0)
-    np_cate: Dict[str, int] = defaultdict(lambda: 0)
+    non_cate: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
+    para_cate: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
+    np_cate: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
 
     cases_show = []
 
-    for group, case in zip(groups, cases):
+    for group, case, cate in zip(groups, cases, cates):
       key = '{:d}{:d}-{:d}'.format(group['n-*'], group['*-n'], group['n-n'])
-      non_cate[key] += 1
+      non_cate[cate][key] += 1
       if key == '01-1':
         cases_show.append(case)
 
       if 'p-*' in group:
-        para_cate['{:d}{:d}-{:d}'.format(group['p-*'], group['*-p'], group['p-p'])] += 1
+        para_cate[cate]['{:d}{:d}-{:d}'.format(group['p-*'], group['*-p'], group['p-p'])] += 1
 
         if group['n-*'] and group['*-p']:
-          np_cate['np-{:d}'.format(group['n-p'])] += 1
+          np_cate[cate]['np-{:d}'.format(group['n-p'])] += 1
         if group['p-*'] and group['*-n']:
-          np_cate['pn-{:d}'.format(group['p-n'])] += 1
+          np_cate[cate]['pn-{:d}'.format(group['p-n'])] += 1
 
-    print(sorted(non_cate.items(), key=lambda x: x[0]))
-    print(sorted(para_cate.items(), key=lambda x: x[0]))
-    print(sorted(np_cate.items(), key=lambda x: x[0]))
+    printstat(non_cate)
+    printstat(non_cate, norm=True)
+    printstat(para_cate)
+    printstat(np_cate)
 
     for case in cases_show[:10]:
       printify(case)

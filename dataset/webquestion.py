@@ -114,3 +114,10 @@ class ComplexWebQuestion(object):
       raise Exception('load webquestion first')
     for k, v in getattr(self, split).items():
       yield getattr(self, 'decompose_{}'.format(v['type']))(v, self.webq[v['webqsp_ID']])
+
+
+  def __getitem__(self, item: str):
+    for split in ['train', 'dev']:
+      if item in getattr(self, split):
+        return getattr(self, split)[item]
+    raise KeyError
