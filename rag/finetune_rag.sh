@@ -5,7 +5,7 @@ export PYTHONPATH="../":"${PYTHONPATH}"
 # run ./examples/rag/finetune_rag.sh --help to see all the possible options
 
 DATA_DIR=nq_raw_small
-MODEL_NAME_OR_PATH=facebook/rag-sequence-nq
+MODEL_NAME_OR_PATH=models/rag_combine_dedup_ep5/checkpoint6  # facebook/rag-sequence-nq
 mode=$1
 OUTPUT_DIR=$2  # models/rag_combine
 gpus=$3
@@ -23,7 +23,7 @@ CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --do_train \
     --do_predict \
     --n_val -1 \
-    --train_batch_size 8 \
+    --train_batch_size 6 \
     --eval_batch_size 1 \
     --max_source_length 128 \
     --max_target_length 25 \
@@ -37,7 +37,7 @@ CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --max_grad_norm 0.1 \
     --lr_scheduler polynomial \
     --learning_rate 3e-05 \
-    --num_train_epochs 5 \
+    --num_train_epochs 15 \
     --warmup_steps 500 \
     --gradient_accumulation_steps 1 \
     --retrieval_mode ${mode} \

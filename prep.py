@@ -6,7 +6,7 @@ import urllib
 from random import shuffle
 import numpy as np
 import matplotlib.pyplot as plot
-from dataset import Break, HoptopQA
+from dataset import Break, HoptopQA, WebQeustion, ComplexWebQuestion
 from rag.utils_rag import exact_match_score, f1_score
 from rag.eval_rag import get_scores
 
@@ -40,7 +40,7 @@ def adaptive(pred1: str, pred2: str, gold_file: str, thres: float=0.0):
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'ana', 'nq', 'ada', 'same'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'nq', 'ada', 'same'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -80,6 +80,25 @@ if __name__ == '__main__':
         # use no retrieval
         sfout.write('{}\n'.format(mh['q']))
         tfout.write('{}\n'.format(mh['a']))
+
+  elif args.task == 'cwq':
+    wq = WebQeustion('/home/jzb/exp/Break/break_dataset/QDMR/webqsp')
+    cwq = ComplexWebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/complexwebq', webq=wq)
+    with open(args.output + '.id', 'w') as ifout,\
+      open(args.output + '.source', 'w') as sfout, \
+      open(args.output + '.single.target', 'w') as stfout, \
+      open(args.output + '.multi.target', 'w') as mtfout:
+      for de in cwq.decompose(split=args.split):
+        for sh in de.single_hops:
+          ifout.write(de.ind + '\n')
+          sfout.write('{}\n'.format(sh['q']))
+          stfout.write('{}\n'.format(sh['a'][0]))
+          mtfout.write('{}\n'.format('\t'.join(sh['a'])))
+        mh = de.multi_hop
+        ifout.write(de.ind + '\n')
+        sfout.write('{}\n'.format(mh['q']))
+        stfout.write('{}\n'.format(mh['a'][0]))
+        mtfout.write('{}\n'.format('\t'.join(mh['a'])))
 
   elif args.task == 'comqa':
     def parse_answer(answer, id):
