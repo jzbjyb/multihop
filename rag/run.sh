@@ -2,8 +2,8 @@
 
 mode=$1  # e2ec
 model=$2  # facebook/rag-sequence-nq facebook/rag-sequence-base
-source=$3  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.source  nq_raw/val.source
-target=$4  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.target  nq_raw/val.target
+source=$3  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.source  nq/test.source
+target=$4  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.target  nq/test.target
 out=$5  # hotpotqa/dev_select_project.pred
 gpu=$6
 

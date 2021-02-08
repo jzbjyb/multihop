@@ -38,9 +38,38 @@ def adaptive(pred1: str, pred2: str, gold_file: str, thres: float=0.0):
   print('em {:.2f} f1 {:.2f} total {}, no ret {:.2f}'.format(em / total * 100, f1 / total * 100, total, np.mean(uses) * 100))
 
 
+def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str, ann_file: str):
+  count: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
+  with open(pred1_file, 'r') as p1fin, open(pred2_file, 'r') as p2fin, \
+    open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(ann_file, 'r') as afin:
+    for line in p1fin:
+      pred1, prob1 = line.rstrip('\n').split('\t')
+      pred2, prob2 = p2fin.readline().rstrip('\n').split('\t')
+      prob1, prob2 = float(prob1), float(prob2)
+      golds = tfin.readline().rstrip('\n').split('\t')
+      cates = json.loads(afin.readline())['labels']
+      em1 = max(exact_match_score(pred1, g) for g in golds)
+      em2 = max(exact_match_score(pred2, g) for g in golds)
+      for cate in cates:
+        count[cate]['{:d}{:d}'.format(int(em1), int(em2))] += 1
+      if 'no_question_overlap' in cates and 'no_answer_overlap' in cates:
+        count['no_overlap']['{:d}{:d}'.format(int(em1), int(em2))] += 1
+  for cate, stat in count.items():
+    print(cate)
+    total = sum(stat.values())
+    stat = sorted(stat.items(), key=lambda x: x[0])
+    print(stat)
+    stat = ['{:.2f}%'.format(v / total * 100) for k, v in stat]
+    for i, v in enumerate(stat):
+      if i % 2 == 0:
+        print(v, end='')
+      else:
+        print('\t' + v, end='\n')
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'nq', 'ada', 'same'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'nq', 'ada', 'same', 'overlap'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -281,3 +310,7 @@ if __name__ == '__main__':
       print(g)
       for p, g, q in case:
         print(q, p, sep='\t')
+
+  elif args.task == 'overlap':
+    pred1, pred2, source_file, target_file, ana_file = args.input
+    overlap(pred1, pred2, source_file, target_file, ana_file)
