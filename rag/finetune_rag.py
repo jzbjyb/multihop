@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 import torch.distributed as dist
 from pytorch_lightning.accelerators.ddp_accelerator import DDPAccelerator
 from pytorch_lightning.cluster_environments import TorchElasticEnvironment
@@ -124,9 +125,11 @@ class GenerativeQAModule(BaseTransformer):
             self.model_class = T5ForConditionalGeneration
         self.is_rag_model = is_rag_model(hparams.model_type)
         self.retrieval_mode = hparams.retrieval_mode
+        self.retrieval_hop = hparams.retrieval_hop
 
         config_class = RagConfig if self.is_rag_model else AutoConfig
         config = config_class.from_pretrained(hparams.model_name_or_path)
+        config.max_combined_length = hparams.max_combined_length  # need to be smaller for multihop training
 
         # set retriever parameters
         config.index_name = hparams.index_name or config.index_name
@@ -143,12 +146,14 @@ class GenerativeQAModule(BaseTransformer):
             hparams, config.generator = set_extra_model_params(extra_model_params, hparams, config.generator)
             if hparams.distributed_retriever == "pytorch":
                 retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))  # TODO: debug
+                #retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', index_name='exact', use_dummy_dataset=True)
                 #retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
             elif hparams.distributed_retriever == "ray":
                 # The Ray retriever needs the handles to the retriever actors.
                 retriever = RagRayDistributedRetriever.from_pretrained(
                     hparams.model_name_or_path, hparams.actor_handles, config=config
                 )
+            retriever.config.max_combined_length = hparams.max_combined_length  # need to be smaller for multihop training
             model = self.model_class.from_pretrained(hparams.model_name_or_path, config=config, retriever=retriever)
             prefix = config.question_encoder.prefix
         else:
@@ -218,7 +223,126 @@ class GenerativeQAModule(BaseTransformer):
         )
         return lmap(str.strip, gen_text)
 
+    def truncate_multihop_question(self, question, max_doc_tokens: int=64):
+        sep = self.model.config.doc_sep
+        questions = question.rsplit(sep, 1)
+        if len(questions) <= 1:
+            return question
+        return ' '.join(questions[0].split(' ')[:max_doc_tokens]) + self.model.config.doc_sep + questions[1]
+
+    def convert_to_decoder_ids(self, ids: torch.LongTensor, mask: torch.LongTensor):
+        model = self.model
+        strings = model.retriever.generator_tokenizer.batch_decode(ids, skip_special_tokens=True)
+        strings = [self.truncate_multihop_question(s) for s in strings]
+        ids = model.retriever.question_encoder_tokenizer.batch_encode_plus(
+            strings,
+            max_length=self.hparams.max_source_length,
+            return_tensors='pt',
+            padding='max_length',
+            truncation=True,
+        )
+        return ids['input_ids'].to(mask), ids['attention_mask'].to(mask)
+
+    def _multihop_step(self, batch: dict, num_hop: int=1) -> Tuple:
+        assert num_hop > 0, 'num_hop should be a positive integer'
+        # TODO: only for RAG models
+        model = self.model
+        config = self.model.config
+
+        n_docs = config.n_docs
+        exclude_bos_score = config.exclude_bos_score
+        reduce_loss = True
+        use_cache = False
+        output_attentions = config.output_attentions
+        output_hidden_states = config.output_hidden_states
+        output_retrieved = config.output_retrieved
+        past_key_values = None
+        epsilon = config.label_smoothing
+        encoder_outputs = None
+
+        source_ids, source_mask, target_ids = batch["input_ids"], batch["attention_mask"], batch["decoder_input_ids"]
+        decoder_input_ids = target_ids
+        decoder_input_ids_il = decoder_input_ids.repeat_interleave(n_docs, dim=0)
+        lm_labels = decoder_input_ids
+
+        # recursive retrieval
+        prev_doc_scores = None
+        loss = 0
+        for nh in range(num_hop):
+            question_enc_outputs = model.question_encoder(source_ids, attention_mask=source_mask, return_dict=True)
+            question_encoder_last_hidden_state = question_enc_outputs[0]  # hidden states of question encoder
+
+            retriever_outputs = model.retriever(
+                source_ids,
+                question_encoder_last_hidden_state.cpu().detach().to(torch.float32).numpy(),
+                prefix=model.generator.config.prefix,
+                n_docs=n_docs,
+                return_tensors='pt',
+            )
+            context_input_ids, context_attention_mask, retrieved_doc_embeds, retrieved_doc_ids = (
+                retriever_outputs['context_input_ids'],
+                retriever_outputs['context_attention_mask'],
+                retriever_outputs['retrieved_doc_embeds'],
+                retriever_outputs['doc_ids'],
+            )
+
+            retrieved_doc_embeds = retrieved_doc_embeds.to(question_encoder_last_hidden_state)
+            context_input_ids = context_input_ids.to(source_ids)
+            context_attention_mask = context_attention_mask.to(source_ids)
+            doc_scores = torch.bmm(question_encoder_last_hidden_state.unsqueeze(1), retrieved_doc_embeds.transpose(1, 2)).squeeze(1)
+
+            if prev_doc_scores is None:
+                prev_doc_scores = doc_scores
+            else:
+                seq_len = context_input_ids.size(1)
+
+                # log prob over previous docs
+                prev_doc_scores = F.log_softmax(prev_doc_scores, dim=1).view(-1).unsqueeze(-1)  # SHAPE: (batch_size * ndoc, 1)
+                # log prob over current docs
+                prev_doc_scores = prev_doc_scores + F.log_softmax(doc_scores, dim=1)  # SHAPE: (batch_size * ndoc, ndoc)
+                prev_doc_scores = prev_doc_scores.view(-1, n_docs * n_docs)  # SHAPE: (batch_size, ndoc * ndoc)
+                prev_doc_scores, topk_ind = torch.topk(prev_doc_scores, n_docs, dim=1)  # SHAPE: (batch_size, ndoc)
+                topk_ind = topk_ind.unsqueeze(-1).expand(-1, -1, seq_len)  # SHAPE: (batch_size, ndoc, seq_len)
+
+                # beam search
+                context_input_ids = context_input_ids.view(-1, n_docs * n_docs, seq_len)  # SHAPE: (batch_size, ndoc * ndoc, seq_len)
+                context_attention_mask = context_attention_mask.view(-1, n_docs * n_docs, seq_len)  # SHAPE: (batch_size, ndoc * ndoc, seq_len)
+                context_input_ids = torch.gather(context_input_ids, 1, topk_ind)  # SHAPE: (batch_size, ndoc, seq_len)
+                context_attention_mask = torch.gather(context_attention_mask, 1, topk_ind)  # SHAPE: (batch_size, ndoc, seq_len)
+                context_input_ids = context_input_ids.view(-1, seq_len)  # SHAPE: (batch_size * ndoc, seq_len)
+                context_attention_mask = context_attention_mask.view(-1, seq_len)  # SHAPE: (batch_size * ndoc, seq_len)
+
+            # "query" for the next iteration
+            # TODO: documents too long might truncate questions
+            if nh != num_hop - 1:
+                source_ids, source_mask = self.convert_to_decoder_ids(context_input_ids, context_attention_mask)
+
+            # loss for the current hop
+            gen_outputs = model.generator(
+                input_ids=context_input_ids,
+                attention_mask=context_attention_mask,
+                encoder_outputs=encoder_outputs,
+                decoder_input_ids=decoder_input_ids_il,
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                output_attentions=output_attentions,
+                return_dict=True,
+            )
+            loss += model.get_nll(
+                gen_outputs.logits,
+                prev_doc_scores,
+                decoder_input_ids,
+                reduce_loss=reduce_loss,
+                epsilon=epsilon,
+                exclude_bos_score=exclude_bos_score,
+                n_docs=n_docs,
+            )
+        return (loss,)
+
     def _step(self, batch: dict, use_retrieval: bool=True) -> Tuple:
+        if use_retrieval:
+            return self._multihop_step(batch=batch, num_hop=self.retrieval_hop)
+
         source_ids, source_mask, target_ids = batch["input_ids"], batch["attention_mask"], batch["decoder_input_ids"]
         source_ids_fd, source_mask_fd = batch["input_ids_for_decoder"], batch["attention_mask_for_decoder"]
 
@@ -535,6 +659,16 @@ class GenerativeQAModule(BaseTransformer):
             type=str,
             choices=['ret', 'no', 'combine'],
             default='ret'
+        )
+        parser.add_argument(
+            '--retrieval_hop',
+            type=int,
+            default=1
+        )
+        parser.add_argument(
+            '--max_combined_length',
+            type=int,
+            default=300
         )
         return parser
 

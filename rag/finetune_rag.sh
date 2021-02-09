@@ -4,13 +4,16 @@ export PYTHONPATH="../":"${PYTHONPATH}"
 # A sample finetuning run, you need to specify data_dir, output_dir and model_name_or_path
 # run ./examples/rag/finetune_rag.sh --help to see all the possible options
 
-DATA_DIR=nq_raw_small
-MODEL_NAME_OR_PATH=models/rag_combine_dedup_ep5/checkpoint6  # facebook/rag-sequence-nq
+DATA_DIR=nq_small
+MODEL_NAME_OR_PATH=facebook/rag-sequence-nq  # facebook/rag-sequence-nq
+max_combined_length=200
 mode=$1
-OUTPUT_DIR=$2  # models/rag_combine
-gpus=$3
-ngpus=$4
-port=$5
+hop=$2
+OUTPUT_DIR=$3  # models/rag_combine
+gpus=$4
+ngpus=$5
+port=$6
+batch_size=$(( 1*${ngpus} ))
 
 CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --data_dir $DATA_DIR \
@@ -23,7 +26,7 @@ CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --do_train \
     --do_predict \
     --n_val -1 \
-    --train_batch_size 6 \
+    --train_batch_size ${batch_size} \
     --eval_batch_size 1 \
     --max_source_length 128 \
     --max_target_length 25 \
@@ -37,8 +40,10 @@ CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --max_grad_norm 0.1 \
     --lr_scheduler polynomial \
     --learning_rate 3e-05 \
-    --num_train_epochs 15 \
+    --num_train_epochs 3 \
     --warmup_steps 500 \
     --gradient_accumulation_steps 1 \
     --retrieval_mode ${mode} \
+    --retrieval_hop ${hop} \
+    --max_combined_length ${max_combined_length} \
     --distributed-port ${port}
