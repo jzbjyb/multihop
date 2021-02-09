@@ -5,6 +5,9 @@ import json
 import urllib
 from random import shuffle
 import numpy as np
+import spacy
+import truecase
+from tqdm import tqdm
 import matplotlib.pyplot as plot
 from dataset import Break, HoptopQA, WebQeustion, ComplexWebQuestion
 from rag.utils_rag import exact_match_score, f1_score
@@ -69,7 +72,7 @@ def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'nq', 'ada', 'same', 'overlap'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -235,6 +238,33 @@ if __name__ == '__main__':
 
     for case in cases_show[:10]:
       printify(case)
+
+  elif args.task == 'ner':
+    nlp = spacy.load('en_core_web_sm')
+    def get_entities(text, nlp, use_truecase=True):
+      if use_truecase:
+        text = truecase.get_true_case(text)
+      doc = nlp(text)
+      return text, [(ent.text, ent.start_char, ent.end_char, ent.label_) for ent in doc.ents]
+    def ner_file(in_fname, dir, split):
+      with open(in_fname) as fin, open(f'{dir}/{split}.ner.txt', 'w') as fout:
+        json_file = json.load(fin)
+        for i, item in tqdm(enumerate(json_file)):
+          id = item['id']
+          question = item['question']
+          answers = item['answer']
+          question, q_es = get_entities(question, nlp)
+          ans_es = [get_entities(a, nlp) for a in answers]
+          answers, ans_es = list(zip(*ans_es))
+          answers = list(answers)
+          ans_es = list(ans_es)
+          fout.write(json.dumps({
+            'id': id,
+            'question': question, 'question_entity': q_es,
+            'answers': answers, 'answers_entity': ans_es}) + '\n')
+    ner_file('rag/nq/nqopen/nqopen-test.json', 'rag/nq/nqopen', 'test')
+    ner_file('rag/nq/nqopen/nqopen-dev.json', 'rag/nq/nqopen', 'val')
+    ner_file('rag/nq/nqopen/nqopen-train.json', 'rag/nq/nqopen', 'train')
 
   elif args.task == 'nq':
     def read_file(in_fname, dir, split, ans_format='first'):
