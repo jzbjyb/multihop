@@ -223,20 +223,19 @@ class GenerativeQAModule(BaseTransformer):
         )
         return lmap(str.strip, gen_text)
 
-    def truncate_multihop_question(self, question, max_doc_tokens: int=64):
-        sep = self.model.config.doc_sep
-        questions = question.rsplit(sep, 1)
-        if len(questions) <= 1:
-            return question
-        return ' '.join(questions[0].split(' ')[:max_doc_tokens]) + self.model.config.doc_sep + questions[1]
-
-    def convert_to_decoder_ids(self, ids: torch.LongTensor, mask: torch.LongTensor):
-        model = self.model
+    @staticmethod
+    def convert_to_decoder_ids(ids: torch.LongTensor, mask: torch.LongTensor, model, max_source_length: int):
+        def truncate_multihop_question(question, max_doc_tokens: int = 64):
+            sep = model.config.doc_sep
+            questions = question.rsplit(sep, 1)
+            if len(questions) <= 1:
+                return question
+            return ' '.join(questions[0].split(' ')[:max_doc_tokens]) + sep + questions[1]
         strings = model.retriever.generator_tokenizer.batch_decode(ids, skip_special_tokens=True)
-        strings = [self.truncate_multihop_question(s) for s in strings]
+        strings = [truncate_multihop_question(s) for s in strings]
         ids = model.retriever.question_encoder_tokenizer.batch_encode_plus(
             strings,
-            max_length=self.hparams.max_source_length,
+            max_length=max_source_length,
             return_tensors='pt',
             padding='max_length',
             truncation=True,
@@ -315,7 +314,8 @@ class GenerativeQAModule(BaseTransformer):
             # "query" for the next iteration
             # TODO: documents too long might truncate questions
             if nh != num_hop - 1:
-                source_ids, source_mask = self.convert_to_decoder_ids(context_input_ids, context_attention_mask)
+                source_ids, source_mask = self.convert_to_decoder_ids(
+                    context_input_ids, context_attention_mask, self.model, self.hparams.max_source_length)
 
             # loss for the current hop
             gen_outputs = model.generator(

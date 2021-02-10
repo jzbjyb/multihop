@@ -10,6 +10,7 @@ import sys
 
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 from collections import defaultdict
 
@@ -20,6 +21,7 @@ from transformers import logging as transformers_logging
 sys.path.append(os.path.join(os.getcwd()))  # noqa: E402 # isort:skip
 from utils_rag import exact_match_score, f1_score  # noqa: E402 # isort:skip
 from rag_model import MyRagSequenceForGeneration
+from finetune_rag import GenerativeQAModule
 
 
 logger = logging.getLogger(__name__)
@@ -124,6 +126,103 @@ def evaluate_batch_retrieval(args, rag_model, questions):
         provenance = [strip_title(title) for title in docs["title"]]
         provenance_strings.append("\t".join(provenance))
     return provenance_strings
+
+
+def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
+    n_docs = rag_model.config.n_docs
+    do_deduplication = rag_model.config.do_deduplication
+    num_doc_return_sequences = rag_model.config.num_return_sequences
+    num_beams = args.num_beams
+    with torch.no_grad():
+        inputs_dict = rag_model.retriever.question_encoder_tokenizer.batch_encode_plus(
+            questions, return_tensors='pt', padding=True, truncation=True)
+        input_ids = inputs_dict['input_ids'].to(args.device)
+        attention_mask = inputs_dict['attention_mask'].to(args.device)
+        prev_doc_scores = None
+
+        # retrieve
+        for nh in range(args.retrieval_hop):
+            question_hidden_states = rag_model.question_encoder(input_ids, attention_mask=attention_mask)[0]
+            retriever_outputs = rag_model.retriever(
+                input_ids,
+                question_hidden_states.cpu().detach().to(torch.float32).numpy(),
+                prefix=rag_model.generator.config.prefix,
+                n_docs=n_docs,
+                return_tensors='pt',
+            )
+            context_input_ids, context_attention_mask, retrieved_doc_embeds = (
+                retriever_outputs['context_input_ids'],
+                retriever_outputs['context_attention_mask'],
+                retriever_outputs['retrieved_doc_embeds'],
+            )
+            retrieved_doc_embeds = retrieved_doc_embeds.to(question_hidden_states)
+            context_input_ids = context_input_ids.to(input_ids)
+            context_attention_mask = context_attention_mask.to(input_ids)
+            doc_scores = torch.bmm(question_hidden_states.unsqueeze(1), retrieved_doc_embeds.transpose(1, 2)).squeeze(1)
+            if prev_doc_scores is None:
+                prev_doc_scores = doc_scores
+            else:
+                seq_len = context_input_ids.size(1)
+
+                # log prob over previous docs
+                prev_doc_scores = F.log_softmax(prev_doc_scores, dim=1).view(-1).unsqueeze(-1)  # SHAPE: (batch_size * ndoc, 1)
+                # log prob over current docs
+                prev_doc_scores = prev_doc_scores + F.log_softmax(doc_scores, dim=1)  # SHAPE: (batch_size * ndoc, ndoc)
+                prev_doc_scores = prev_doc_scores.view(-1, n_docs * n_docs)  # SHAPE: (batch_size, ndoc * ndoc)
+                prev_doc_scores, topk_ind = torch.topk(prev_doc_scores, n_docs, dim=1)  # SHAPE: (batch_size, ndoc)
+                topk_ind = topk_ind.unsqueeze(-1).expand(-1, -1, seq_len)  # SHAPE: (batch_size, ndoc, seq_len)
+
+                # beam search
+                context_input_ids = context_input_ids.view(-1, n_docs * n_docs, seq_len)  # SHAPE: (batch_size, ndoc * ndoc, seq_len)
+                context_attention_mask = context_attention_mask.view(-1, n_docs * n_docs, seq_len)  # SHAPE: (batch_size, ndoc * ndoc, seq_len)
+                context_input_ids = torch.gather(context_input_ids, 1, topk_ind)  # SHAPE: (batch_size, ndoc, seq_len)
+                context_attention_mask = torch.gather(context_attention_mask, 1, topk_ind)  # SHAPE: (batch_size, ndoc, seq_len)
+                context_input_ids = context_input_ids.view(-1, seq_len)  # SHAPE: (batch_size * ndoc, seq_len)
+                context_attention_mask = context_attention_mask.view(-1, seq_len)  # SHAPE: (batch_size * ndoc, seq_len)
+            if nh != args.retrieval_hop - 1:
+                input_ids, attention_mask = GenerativeQAModule.convert_to_decoder_ids(context_input_ids, context_attention_mask, rag_model, 128)  # TODO: add param
+
+        # generate
+        hypos = []
+        logprobs = []
+        batch_size = context_input_ids.shape[0] // n_docs
+
+        for index in range(batch_size):
+            # first, generate beams from documents:
+            generator_input_ids = context_input_ids[index * n_docs : (index + 1) * n_docs]  # (n_docs, max_len)
+            output_sequences = rag_model.generator.generate(
+                generator_input_ids,
+                attention_mask=None,
+                num_beams=num_beams,
+                num_return_sequences=num_doc_return_sequences
+            )  # n_docs * n_beam, tgt_len
+            if do_deduplication:
+                # do_deduplication, max_output_len
+                output_sequences = torch.stack(list({str(k.tolist()): k for k in output_sequences}.values()))
+            num_candidates = output_sequences.shape[0]  # after deduplication, this number can be less than n_docs*n_beam
+            individual_input_ids = generator_input_ids.repeat(num_candidates, 1)
+            individual_attention_mask = context_attention_mask[index * n_docs : (index + 1) * n_docs]
+            individual_attention_mask = individual_attention_mask.repeat(num_candidates, 1)
+            individual_doc_scores = prev_doc_scores[index : (index + 1), :]  # doc_scores.shape = [batch, n_docs]
+            individual_doc_scores = individual_doc_scores.repeat(num_candidates, 1)  # [num_candidates, n_docs]
+            outputs = rag_model(
+                context_input_ids=individual_input_ids,
+                context_attention_mask=individual_attention_mask,
+                doc_scores=individual_doc_scores,
+                labels=output_sequences,
+                exclude_bos_score=True,
+            )
+            lps, top_cand_inds = (-outputs['loss']).topk(num_doc_return_sequences)
+            # add hypothesis
+            hypos.append(output_sequences[top_cand_inds])
+            logprobs.append(lps)
+        outputs = rag_model._cat_and_pad(hypos, pad_token_id=rag_model.config.generator.pad_token_id)
+        logprobs = torch.cat(logprobs, 0)
+        answers = rag_model.retriever.generator_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        if args.print_predictions:
+            for q, a in zip(questions, answers):
+                logger.info("Q: {} - A: {}".format(q, a))
+        return answers, logprobs.cpu().numpy()
 
 
 def evaluate_batch_e2e(args, rag_model, questions):
@@ -231,6 +330,11 @@ def get_args():
         type=str,
         help="Evaluation mode, e2e calculates exact match and F1 of the downstream task, retrieval calculates precision@k.",
     )
+    parser.add_argument(
+        '--retrieval_hop',
+        type=int,
+        default=1
+    )
     parser.add_argument("--k", default=1, type=int, help="k for the precision@k calculation")
     parser.add_argument(
         "--evaluation_set",
@@ -326,7 +430,7 @@ def main(args):
     logger.info("Evaluate the following checkpoints: %s", checkpoints)
 
     if args.eval_mode == "e2e":
-        evaluate_batch_fn = evaluate_batch_e2e
+        evaluate_batch_fn = evaluate_batch_e2e_multihop_retrieval
         score_fn = get_scores
     elif args.eval_mode == 'e2ec':
         evaluate_batch_fn = evaluate_batch_e2e_with_context

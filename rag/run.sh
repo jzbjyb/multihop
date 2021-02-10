@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 
 mode=$1  # e2ec
-model=$2  # facebook/rag-sequence-nq facebook/rag-sequence-base
-source=$3  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.source  nq/test.source
-target=$4  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.target  nq/test.target
-out=$5  # hotpotqa/dev_select_project.pred
-gpu=$6
+hop=$2
+model=$3  # facebook/rag-sequence-nq facebook/rag-sequence-base
+source=$4  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.source  nq/test.source
+target=$5  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.target  nq/test.target
+out=$6  # hotpotqa/dev_select_project.pred
+gpu=$7
 
 if [[ ${mode} == 'e2e' ]]; then
     ndocs=5
@@ -20,6 +21,7 @@ CUDA_VISIBLE_DEVICES=${gpu} proxychains4 python eval_rag.py \
     --gold_data_path ${target} \
     --predictions_path ${out} \
     --eval_mode ${mode} \
+    --retrieval_hop ${hop} \
     --gold_data_mode ans_tab \
     --num_beams 1 \
     --n_docs ${ndocs} \
