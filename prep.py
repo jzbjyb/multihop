@@ -230,6 +230,8 @@ if __name__ == '__main__':
     if 'cwq' in pred_file:
       addtion_res = ComplexWebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/complexwebq',
                                        webq=WebQeustion('/home/jzb/exp/Break/break_dataset/QDMR/webqsp'))
+    if 'op' in add_file:
+      addtion_res = lambda x: x
 
     with open(pred_file, 'r') as pfin, open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(add_file, 'r') as afin:
       for i, l in enumerate(pfin):
@@ -242,8 +244,10 @@ if __name__ == '__main__':
         if i % len(numhops2temps[args.num_hops]) == 0:
           groups.append([])
           cases.append([])
-          if addtion_res is not None:
+          if type(addtion_res) is ComplexWebQuestion:
             cates.append(addtion_res[addition]['type'])
+          elif callable(addtion_res):
+            cates.append(addtion_res(addition))
           else:
             cates.append('')
         groups[-1].append(em)
@@ -253,16 +257,14 @@ if __name__ == '__main__':
     groups = [dict(zip(temps, group)) for group in groups]
 
     non_cate: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
+    non_cate_case: Dict[str, Dict[str, List]] = defaultdict(lambda: defaultdict(list))
     para_cate: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
     np_cate: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
-
-    cases_show = []
 
     for group, case, cate in zip(groups, cases, cates):
       key = '{:d}{:d}-{:d}'.format(group['n-*'], group['*-n'], group['n-n'])
       non_cate[cate][key] += 1
-      if key == '01-1':
-        cases_show.append(case)
+      non_cate_case[cate][key].append(case)
 
       if 'p-*' in group:
         para_cate[cate]['{:d}{:d}-{:d}'.format(group['p-*'], group['*-p'], group['p-p'])] += 1
@@ -277,8 +279,11 @@ if __name__ == '__main__':
     printstat(para_cate)
     printstat(np_cate)
 
-    for case in cases_show[:10]:
-      printify(case)
+    show_key = '01-0'
+    for cate, cases in non_cate_case.items():
+      print('-> {}'.format(cate))
+      for case in cases[show_key][:5]:
+        printify(case)
 
   elif args.task == 'ner':
     nlp = spacy.load('en_core_web_sm')
