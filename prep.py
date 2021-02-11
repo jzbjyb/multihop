@@ -399,13 +399,23 @@ if __name__ == '__main__':
       open(args.output + '.source', 'w') as sfout, \
       open(args.output + '.target', 'w') as tfout, \
       open(args.output + '.op', 'w') as ofout:
+      maxu = maxi = 0
       for l in fin:
         mhq = MultihopQuestion.fromstr(l)
+        op = mhq.kwargs['op']
+        if op == 'union':
+          if maxu >= 500:
+            continue
+          maxu += 1
+        if op == 'intersection':
+          if maxi >= 500:
+            continue
+          maxi += 1
         for sh in mhq.single_hops:
           sfout.write(sh['q'] + '\n')
           tfout.write('\t'.join(sh['a']) + '\n')
-          ofout.write(mhq.kwargs['op'] + '\n')
+          ofout.write(op + '\n')
         mh = mhq.multi_hop
         sfout.write(mh['q'] + '\n')
         tfout.write('\t'.join(mh['a']) + '\n')
-        ofout.write(mhq.kwargs['op'] + '\n')
+        ofout.write(op + '\n')
