@@ -1,11 +1,13 @@
 from typing import List, Dict, Any
+import json
 
 
 class MultihopQuestion(object):
-  def __init__(self, single_hops: List[Dict], multi_hop: Dict, ind: Any):
+  def __init__(self, single_hops: List[Dict], multi_hop: Dict, ind: Any, **kwargs):
     self.single_hops = single_hops
     self.multi_hop = multi_hop
     self.ind = ind
+    self.kwargs = kwargs
     for sh in self.single_hops:
       sh['q'] = self.format_question(sh['q'])
 
@@ -17,4 +19,18 @@ class MultihopQuestion(object):
 
 
   def __str__(self):
-    return self.ind + '\n' + str(self.single_hops) + '\n' + str(self.multi_hop)
+    out = {'single': self.single_hops, 'multi': self.multi_hop, 'id': self.ind}
+    out.update(self.kwargs)
+    return json.dumps(out)
+
+
+  @classmethod
+  def fromstr(cls, text):
+    d = json.loads(text)
+    single_hops = d['single']
+    multi_hop = d['multi']
+    ind = d['id']
+    del d['single']
+    del d['multi']
+    del d['id']
+    return cls(single_hops, multi_hop, ind, **d)

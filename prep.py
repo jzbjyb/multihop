@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Set, Tuple
 from collections import defaultdict
 import argparse
 import json
@@ -9,7 +9,7 @@ import spacy
 import truecase
 from tqdm import tqdm
 import matplotlib.pyplot as plot
-from dataset import Break, HoptopQA, WebQeustion, ComplexWebQuestion
+from dataset import Break, HoptopQA, WebQeustion, ComplexWebQuestion, SlingExtractor, MultihopQuestion
 from rag.utils_rag import exact_match_score, f1_score
 from rag.eval_rag import get_scores
 
@@ -39,6 +39,47 @@ def adaptive(pred1: str, pred2: str, gold_file: str, thres: float=0.0):
       f1 += max(f1_score(pred, g) for g in golds)
       total += 1
   print('em {:.2f} f1 {:.2f} total {}, no ret {:.2f}'.format(em / total * 100, f1 / total * 100, total, np.mean(uses) * 100))
+
+
+def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: List[str]):
+  set_ops = {'union', 'intersection'}
+  count = 0
+  build_index = len(set_ops & set(ops)) > 0
+  ans2ques: Dict[str, List[Dict]] = defaultdict(list)
+
+  # no set ops
+  no_ops = set(ops) - set_ops
+  # set ops
+  ops = set(ops) & set_ops
+  with open(question_file, 'r') as fin, open(output_file, 'w') as fout:
+    for l in tqdm(fin):
+      question = json.loads(l)
+      if build_index:
+        for a in question['answers']:
+          ans2ques[a].append(question)
+      for op in no_ops:
+        eqs = se.extend(question, op)
+        for eq in eqs:
+          fout.write(str(eq) + '\n')
+          count += 1
+
+    used_question_pairs: Set[Tuple[str, str]] = set()
+    if build_index:
+      for _, questions in ans2ques.items():
+        for i in range(len(questions)):
+          for j in range(i + 1, len(questions)):
+            q1, q2 = questions[i], questions[j]
+            key = tuple(sorted([q1['id'], q2['id']]))
+            if key in used_question_pairs:
+              continue
+            used_question_pairs.add(key)
+            for op in ops:
+              eqs = se.extend(q1, op, question2=q2)
+              for eq in eqs:
+                fout.write(str(eq) + '\n')
+                count += 1
+
+  print('total count {}'.format(count))
 
 
 def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str, ann_file: str):
@@ -72,7 +113,7 @@ def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -344,3 +385,27 @@ if __name__ == '__main__':
   elif args.task == 'overlap':
     pred1, pred2, source_file, target_file, ana_file = args.input
     overlap(pred1, pred2, source_file, target_file, ana_file)
+
+  elif args.task == 'to_multihop':
+    question_file = args.input
+    se = SlingExtractor()
+    se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
+    se.load_filter('wikidata_property_template.json')
+    to_multihop(question_file, args.output, se,
+                ops=['project_in', 'project_out', 'filter', 'agg', 'superlative', 'union', 'intersection'])
+
+  elif args.task == 'format':
+    with open(args.input[0], 'r') as fin, \
+      open(args.output + '.source', 'w') as sfout, \
+      open(args.output + '.target', 'w') as tfout, \
+      open(args.output + '.op', 'w') as ofout:
+      for l in fin:
+        mhq = MultihopQuestion.fromstr(l)
+        for sh in mhq.single_hops:
+          sfout.write(sh['q'] + '\n')
+          tfout.write('\t'.join(sh['a']) + '\n')
+          ofout.write(mhq.kwargs['op'] + '\n')
+        mh = mhq.multi_hop
+        sfout.write(mh['q'] + '\n')
+        tfout.write('\t'.join(mh['a']) + '\n')
+        ofout.write(mhq.kwargs['op'] + '\n')
