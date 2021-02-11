@@ -139,6 +139,9 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
         input_ids = inputs_dict['input_ids'].to(args.device)
         attention_mask = inputs_dict['attention_mask'].to(args.device)
         prev_doc_scores = None
+        prev_doc_ids = None
+        retrieved_docs = []
+        retrieved_doc_ids = []
 
         # retrieve
         for nh in range(args.retrieval_hop):
@@ -150,17 +153,20 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
                 n_docs=n_docs,
                 return_tensors='pt',
             )
-            context_input_ids, context_attention_mask, retrieved_doc_embeds = (
+            context_input_ids, context_attention_mask, retrieved_doc_embeds, doc_ids = (
                 retriever_outputs['context_input_ids'],
                 retriever_outputs['context_attention_mask'],
                 retriever_outputs['retrieved_doc_embeds'],
+                retriever_outputs['doc_ids']
             )
+            doc_ids = doc_ids.to(input_ids)
             retrieved_doc_embeds = retrieved_doc_embeds.to(question_hidden_states)
             context_input_ids = context_input_ids.to(input_ids)
             context_attention_mask = context_attention_mask.to(input_ids)
             doc_scores = torch.bmm(question_hidden_states.unsqueeze(1), retrieved_doc_embeds.transpose(1, 2)).squeeze(1)
             if prev_doc_scores is None:
                 prev_doc_scores = doc_scores
+                doc_ids = doc_ids.view(-1, nh + 1)
             else:
                 seq_len = context_input_ids.size(1)
 
@@ -170,15 +176,26 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
                 prev_doc_scores = prev_doc_scores + F.log_softmax(doc_scores, dim=1)  # SHAPE: (batch_size * ndoc, ndoc)
                 prev_doc_scores = prev_doc_scores.view(-1, n_docs * n_docs)  # SHAPE: (batch_size, ndoc * ndoc)
                 prev_doc_scores, topk_ind = torch.topk(prev_doc_scores, n_docs, dim=1)  # SHAPE: (batch_size, ndoc)
+                _topk_ind = topk_ind
                 topk_ind = topk_ind.unsqueeze(-1).expand(-1, -1, seq_len)  # SHAPE: (batch_size, ndoc, seq_len)
 
                 # beam search
                 context_input_ids = context_input_ids.view(-1, n_docs * n_docs, seq_len)  # SHAPE: (batch_size, ndoc * ndoc, seq_len)
                 context_attention_mask = context_attention_mask.view(-1, n_docs * n_docs, seq_len)  # SHAPE: (batch_size, ndoc * ndoc, seq_len)
+                doc_ids = doc_ids.view(-1, n_docs * n_docs).unsqueeze(-1)  # SHAPE: (batch_size, ndoc * ndoc, 1)
+                doc_ids = torch.cat([prev_doc_ids.view(-1, n_docs, prev_doc_ids.size(-1)).repeat_interleave(n_docs, dim=1), doc_ids], -1)  # SHAPE: (batch_size, ndoc * ndoc, nh + 1)
                 context_input_ids = torch.gather(context_input_ids, 1, topk_ind)  # SHAPE: (batch_size, ndoc, seq_len)
                 context_attention_mask = torch.gather(context_attention_mask, 1, topk_ind)  # SHAPE: (batch_size, ndoc, seq_len)
+                doc_ids = torch.gather(doc_ids, 1, _topk_ind.unsqueeze(-1).expand(-1, -1, nh + 1))  # SHAPE: (batch_size, ndoc)
                 context_input_ids = context_input_ids.view(-1, seq_len)  # SHAPE: (batch_size * ndoc, seq_len)
                 context_attention_mask = context_attention_mask.view(-1, seq_len)  # SHAPE: (batch_size * ndoc, seq_len)
+                doc_ids = doc_ids.view(-1, nh + 1)  # SHAPE: (batch_size * ndoc, nh + 1)
+
+            prev_doc_ids = doc_ids
+            strings = rag_model.retriever.generator_tokenizer.batch_decode(context_input_ids, skip_special_tokens=True)
+            retrieved_docs.append([strings[i * n_docs:i * n_docs + n_docs] for i in range(len(strings) // n_docs)])
+            retrieved_doc_ids.append([doc_ids[i * n_docs:i * n_docs + n_docs].cpu().numpy().tolist() for i in range(len(strings) // n_docs)])
+
             if nh != args.retrieval_hop - 1:
                 input_ids, attention_mask = GenerativeQAModule.convert_to_decoder_ids(context_input_ids, context_attention_mask, rag_model, 128)  # TODO: add param
 
@@ -222,7 +239,7 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
         if args.print_predictions:
             for q, a in zip(questions, answers):
                 logger.info("Q: {} - A: {}".format(q, a))
-        return answers, logprobs.cpu().numpy()
+        return answers, logprobs.cpu().numpy(), retrieved_docs, retrieved_doc_ids
 
 
 def evaluate_batch_e2e(args, rag_model, questions):
@@ -249,7 +266,7 @@ def evaluate_batch_e2e(args, rag_model, questions):
             for q, a in zip(questions, answers):
                 logger.info("Q: {} - A: {}".format(q, a))
 
-        return answers, logprobs.cpu().numpy()
+        return answers, logprobs.cpu().numpy(), None, None
 
 
 def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
@@ -291,7 +308,7 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
         for q, a in zip(questions, answers):
             logger.info("Q: {} - A: {}".format(q, a))
 
-    return answers, logprobs.cpu().numpy()
+    return answers, logprobs.cpu().numpy(), None, None
 
 
 def get_args():
@@ -406,6 +423,19 @@ def get_args():
     return args
 
 
+def write_html(questions: List[str], answers: List[str], golds: List[str],
+               logprobs: List[float], ret_docs: List[List[List[str]]], ret_doc_ids: List[List[List[int]]], vis_file):
+    for i, (ques, ans, gold, lp) in enumerate(zip(questions, answers, golds, logprobs)):
+        vis_file.write('<div><span>{}</span></div>'.format(ques))
+        vis_file.write('<div><span>Prediction: {}</span> <span>{:.5f}</span></div>'.format(ans, lp))
+        vis_file.write('<div><span>Gold: {}</span></div>'.format(gold))
+        for nh, hop in enumerate(ret_docs):
+            vis_file.write('<div>--- HOP {} ---</div>'.format(nh + 1))
+            for nd, doc in enumerate(hop[i]):
+                vis_file.write('<div> * <b>{}</b> {}</div>'.format('-'.join(map(str, ret_doc_ids[nh][i][nd])), doc))
+        vis_file.write('<hr>')
+
+
 def main(args):
     model_kwargs = {}
     if args.model_type is None:
@@ -461,19 +491,27 @@ def main(args):
             model = model_class.from_pretrained(checkpoint, **model_kwargs)
         model.to(args.device)
 
-        with open(args.evaluation_set, "r") as eval_file, open(args.predictions_path, "w") as preds_file:
+        with open(args.evaluation_set, "r") as eval_file, \
+          open(args.gold_data_path, 'r') as gold_file, \
+          open(args.predictions_path, "w") as preds_file, \
+          open(args.predictions_path + '.html', 'w') as vis_file:
             questions = []
+            golds = []
             for line in tqdm(eval_file):
                 questions.append(line.strip())
+                golds.append(gold_file.readline().rstrip('\n'))
                 if len(questions) == args.eval_batch_size:
-                    answers, logprobs = evaluate_batch_fn(args, model, questions)
+                    answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
                     preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                     preds_file.flush()
+                    write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
                     questions = []
+                    golds = []
             if len(questions) > 0:
-                answers, logprobs = evaluate_batch_fn(args, model, questions)
+                answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
                 preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                 preds_file.flush()
+                write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
 
             score_fn(args, args.predictions_path, args.gold_data_path)
 
