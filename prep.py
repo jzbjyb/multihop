@@ -294,30 +294,56 @@ if __name__ == '__main__':
 
   elif args.task == 'ner':
     nlp = spacy.load('en_core_web_sm')
-    def get_entities(text, nlp, use_truecase=True):
-      if use_truecase:
-        text = truecase.get_true_case(text)
-      doc = nlp(text)
-      return text, [(ent.text, ent.start_char, ent.end_char, ent.label_) for ent in doc.ents]
-    def ner_file(in_fname, dir, split):
+    batch_size = 5000
+
+    def get_entities(doc):
+      return [(ent.text, ent.start_char, ent.end_char, ent.label_) for ent in doc.ents]
+
+    def process_batch(id_li, q_li, a_li, fout):
+      q_docs = list(nlp.pipe(q_li, disable=['parser']))
+      a_docs = list(nlp.pipe([a for anss in a_li for a in anss], disable=['parser']))
+      prev_ind = 0
+      for j, (id, q, anss, q_doc) in enumerate(zip(id_li, q_li, a_li, q_docs)):
+        q_es = get_entities(q_doc)
+        ans_es = []
+        for a in anss:
+          a_doc = a_docs[prev_ind]
+          prev_ind += 1
+          ans_es.append(get_entities(a_doc))
+        fout.write(json.dumps({
+          'id': id,
+          'question': q, 'question_entity': q_es,
+          'answers': anss, 'answers_entity': ans_es}) + '\n')
+
+    def ner_file(in_fname, dir, split, format='jsonl'):
       with open(in_fname) as fin, open(f'{dir}/{split}.ner.txt', 'w') as fout:
-        json_file = json.load(fin)
-        for i, item in tqdm(enumerate(json_file)):
-          id = item['id']
+        if format == 'json':
+          fin = json.load(fin)
+        id_li: List[str] = []
+        q_li: List[str] = []
+        a_li: List[List[str]] = []
+        for i, item in tqdm(enumerate(fin)):
+          if format == 'jsonl':
+            item = json.loads(item)
+          id = item['id'] if 'id' in item else str(i)
           question = item['question']
           answers = item['answer']
-          question, q_es = get_entities(question, nlp)
-          ans_es = [get_entities(a, nlp) for a in answers]
-          answers, ans_es = list(zip(*ans_es))
-          answers = list(answers)
-          ans_es = list(ans_es)
-          fout.write(json.dumps({
-            'id': id,
-            'question': question, 'question_entity': q_es,
-            'answers': answers, 'answers_entity': ans_es}) + '\n')
-    ner_file('rag/nq/nqopen/nqopen-test.json', 'rag/nq/nqopen', 'test')
-    ner_file('rag/nq/nqopen/nqopen-dev.json', 'rag/nq/nqopen', 'val')
-    ner_file('rag/nq/nqopen/nqopen-train.json', 'rag/nq/nqopen', 'train')
+          id_li.append(id)
+          q_li.append(truecase.get_true_case(question))
+          a_li.append(answers)
+          if len(id_li) < batch_size:
+            continue
+          process_batch(id_li, q_li, a_li, fout)
+          id_li = []
+          q_li = []
+          a_li = []
+        if len(id_li) > 0:
+          process_batch(id_li, q_li, a_li, fout)
+
+    ner_file('rag/nq/nqopen/nqopen-test.json', 'rag/nq/nqopen', 'test', format='json')
+    ner_file('rag/nq/nqopen/nqopen-dev.json', 'rag/nq/nqopen', 'val', format='json')
+    ner_file('rag/nq/nqopen/nqopen-train.json', 'rag/nq/nqopen', 'train', format='json')
+    ner_file('../PAQ/PAQ/PAQ.filtered.jsonl', '../PAQ/PAQ', 'all', format='jsonl')
 
   elif args.task == 'nq':
     def read_file(in_fname, dir, split, ans_format='first'):
