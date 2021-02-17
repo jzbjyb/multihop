@@ -279,11 +279,18 @@ if __name__ == '__main__':
     printstat(para_cate)
     printstat(np_cate)
 
-    show_key = '01-0'
-    for cate, cases in non_cate_case.items():
-      print('-> {}'.format(cate))
-      for case in cases[show_key][:5]:
-        printify(case)
+    with open(args.output, 'w') as fout:
+      for cate, cases in non_cate_case.items():
+        fout.write('<h1>{}</h1>\n'.format(cate))
+        for key, case in cases.items():
+          fout.write('<div><span>{}</span></div>\n'.format(key))
+          shuffle(case)
+          for c in case[:5]:
+            fout.write('<br>\n')
+            for s, t, p in c:
+              s = s.split('\t')[0]
+              fout.write('<div>{}&nbsp;&nbsp;&nbsp;{}&nbsp;&nbsp;&nbsp;{}</div>'.format(s, t, p))
+          fout.write('<hr>\n')
 
   elif args.task == 'ner':
     nlp = spacy.load('en_core_web_sm')
