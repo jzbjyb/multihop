@@ -6,6 +6,7 @@ import json
 import random
 from collections import defaultdict
 import numpy as np
+from tqdm import tqdm
 from .multihop_question import MultihopQuestion
 
 
@@ -14,6 +15,17 @@ np.random.seed(2021)
 
 
 class SlingExtractor(object):
+  WH_WORDS = {'what', 'when', 'who', 'whom', 'why', 'where', 'which'}
+  WH2THAT = {
+    'what': 'one',
+    'when': 'time',
+    'who': 'person',
+    'whom': 'person',
+    'why': 'reason',
+    'where': 'place',
+    'which': 'one'
+  }
+
   def load_kb(self, root_dir: str='local/data/e/wiki'):
     print('loading and indexing kb ...')
     start = time.time()
@@ -40,6 +52,24 @@ class SlingExtractor(object):
     with open(filename, 'r') as fin:
       self.property_names = json.load(fin)
       self.filter = set(self.property_names.keys())
+
+
+  def load_single_hop_questions(self, filename: str, max_count: int=None):
+    self.qa_pairs: List[Tuple[str, List[str]]] = []
+    self.ans2qa: Dict[str, Set[int]] = defaultdict(set)
+    self.ansent2qa: Dict[str, Set[int]] = defaultdict(set)
+    with open(filename, 'r') as fin:
+      for l in tqdm(fin):
+        l = json.loads(l)
+        self.qa_pairs.append((l['question'], l['answer']))
+        ind = len(self.qa_pairs) - 1
+        for a in l['answer']:
+          self.ans2qa[a].add(ind)
+          for e in self.phrase.lookup(a):
+            self.ansent2qa[e.id].add(ind)
+            break  # only use the first entity linking
+        if max_count and len(self.qa_pairs) >= max_count:
+          break
 
 
   @staticmethod
@@ -112,40 +142,86 @@ class SlingExtractor(object):
     return list(group.items())
 
 
-  def get_ner(self, ners: List) -> List:
-    return [ner for ner in ners if ner[-1] not in {'DATE', 'TIME', 'PERCENT', 'MONEY', 'QUANTITY', 'ORDINAL', 'CARDINAL'}]
+  def question2statement(self, question: str) -> str:
+    print(question)
+    nq = None
+    question = question.split(' ')
+    first_word = question[0]
+    if first_word not in self.WH_WORDS:
+      return None
+    for i, w in enumerate(question[1:]):
+      if w in {'is', 'are', 'was', 'were', 'am'}:
+        if i == 0:
+          nq = ' '.join([self.WH2THAT[first_word], 'that'] + question[1:])
+        else:
+          nq = ' '.join(question[1:i] + ['that'] + question[i:])
+      elif w in {'do', 'did', 'does'}:
+        if i == 0:
+          nq = ' '.join([self.WH2THAT[first_word], 'that'] + question[2:])
+        else:
+          nq = ' '.join(question[1:i] + ['that'] + question[i+1:])
+    if nq is None:
+      nq = ' '.join([self.WH2THAT[first_word], 'that'] + question[1:])
+    print(nq)
+    input()
+    return nq
 
 
-  def extend_project_in(self, question: Dict, sample_n: int=1) -> List[MultihopQuestion]:
+  def get_ner(self, ners: List, sent: str=None, last: bool=False, only_one: bool=False) -> List:
+    ners = [ner for ner in ners if ner[-1] not in {'DATE', 'TIME', 'PERCENT', 'MONEY', 'QUANTITY', 'ORDINAL', 'CARDINAL'}]
+    if only_one and len(ners) > 1:  # only allow sentences with only one named entities
+      return []
+    if last:
+      ners = [ner for ner in ners if ner[2] == len(sent)]
+    return ners
+
+
+  def extend_project_in(self, question: Dict, sample_n: int=1, use_qa_pairs: bool=False) -> List[MultihopQuestion]:
     mqs = []
     # replace entities in the question
-    for qe in self.get_ner(question['question_entity']):
+    for qe in self.get_ner(question['question_entity'], sent=question['question'], last=True, only_one=True):
       qe_mention, qe_start, qe_end, _ = qe
       qe_wikis = self.phrase.lookup(qe_mention)
       if len(qe_wikis) <= 0:
         return mqs
       qe_wid, qe_wname = qe_wikis[0].id, qe_wikis[0].name  # only the first of entity linking
-      ps = self.iter_property(qe_wid, type='can')
-      if len(ps) <= 0:
-        return mqs
-      for sn in np.random.choice(len(ps), min(sample_n, len(ps)), replace=False):
-        pid, tailid = ps[sn]
-        qe_type = self.get_type(qe_wid)
-        if qe_type is None:
-          continue
-        if len(tailid) > 1:
-          continue
-        tailid = tailid[0]
-        insert = '{} that {} {}'.format(qe_type, self.property_names[pid], self.kb[tailid].name)  # TODO: this might not be unique
-        fir_q = 'return ' + insert
-        fir_a = [qe_mention]
-        sec_q = question['question']
-        sec_a = question['answers']
-        multi_q = ' '.join([question['question'][:qe_start].rstrip(), insert, question['question'][qe_end:].lstrip()])
-        multi_a = question['answers']
-        mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
-                              {'q': multi_q, 'a': multi_a}, ind=question['id'], op='project_in')
-        mqs.append(mq)
+      if use_qa_pairs:
+        if len(self.ansent2qa[qe_wid]) <= 0:
+          return mqs
+        for sn in np.random.choice(list(self.ansent2qa[qe_wid]), min(sample_n, len(self.ansent2qa[qe_wid])), replace=False):
+          fir_q, fir_a = self.qa_pairs[sn]
+          fir_stat = self.question2statement(fir_q)
+          if fir_stat is None:
+            continue
+          sec_q = question['question']
+          sec_a = question['answers']
+          multi_q = ' '.join([question['question'][:qe_start].rstrip(), fir_stat, question['question'][qe_end:].lstrip()])
+          multi_a = sec_a
+          mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
+                                {'q': multi_q, 'a': multi_a}, ind=question['id'], op='project_in')
+          mqs.append(mq)
+      else:
+        ps = self.iter_property(qe_wid, type='can')
+        if len(ps) <= 0:
+          return mqs
+        for sn in np.random.choice(len(ps), min(sample_n, len(ps)), replace=False):
+          pid, tailid = ps[sn]
+          qe_type = self.get_type(qe_wid)
+          if qe_type is None:
+            continue
+          if len(tailid) > 1:
+            continue
+          tailid = tailid[0]
+          insert = '{} that {} {}'.format(qe_type, self.property_names[pid], self.kb[tailid].name)  # TODO: this might not be unique
+          fir_q = 'return ' + insert
+          fir_a = [qe_mention]
+          sec_q = question['question']
+          sec_a = question['answers']
+          multi_q = ' '.join([question['question'][:qe_start].rstrip(), insert, question['question'][qe_end:].lstrip()])
+          multi_a = question['answers']
+          mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
+                                {'q': multi_q, 'a': multi_a}, ind=question['id'], op='project_in')
+          mqs.append(mq)
     return mqs
 
 
@@ -227,7 +303,7 @@ class SlingExtractor(object):
     fir_a = question['answers']
     for sn in np.random.choice(len(com_pid_tailids), min(sample_n, len(com_pid_tailids)), replace=False):
       pid, tailid, sub_inds = com_pid_tailids[sn]
-      sec_q = 'return from {} that {} {}'.format(', '.join(fir_a), self.property_names[pid], self.kb[tailid].name)
+      sec_q = 'Which one of the following {} {}: {}'.format(self.property_names[pid], self.kb[tailid].name, ', '.join(fir_a))
       sec_a = [fir_a[sub] for sub in sub_inds]
       multi_q = '{} and {} {}'.format(fir_q, self.property_names[pid], self.kb[tailid].name)
       multi_a = sec_a
@@ -310,7 +386,7 @@ class SlingExtractor(object):
     fir_a = question['answers']
     for sn in np.random.choice(len(com_pid_tailids), min(sample_n, len(com_pid_tailids)), replace=False):
       pid, sup, sub_inds = com_pid_tailids[sn]
-      sec_q = 'return from {} that {} {}'.format(', '.join(fir_a), self.property_names[pid], sup2word[sup])
+      sec_q = 'Which one of the following {} {}: {}'.format(self.property_names[pid], sup2word[sup], ', '.join(fir_a))
       sec_a = [fir_a[sub] for sub in sub_inds]
       multi_q = '{} and {} {}'.format(fir_q, self.property_names[pid], sup2word[sup])
       multi_a = sec_a
@@ -344,9 +420,50 @@ class SlingExtractor(object):
     return [mq]
 
 
+  def add_another_project_in(self, question: Dict, sample_n: int=1) -> List[MultihopQuestion]:
+    mqs = []
+    # replace entities in the question
+    for qe in self.get_ner(question['question_entity']):
+      qe_mention, qe_start, qe_end, _ = qe
+      qe_wikis = self.phrase.lookup(qe_mention)
+      if len(qe_wikis) <= 0:
+        return mqs
+      qe_wid, qe_wname = qe_wikis[0].id, qe_wikis[0].name  # only the first of entity linking
+      if len(self.ansent2qa[qe_wid]) <= 0:
+        return mqs
+      for sn in np.random.choice(list(self.ansent2qa[qe_wid]), min(sample_n, len(self.ansent2qa[qe_wid])), replace=False):
+        fir_q, fir_a = self.qa_pairs[sn]
+        sec_q = question['question']
+        sec_a = question['answers']
+        mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
+                              {'q': None, 'a': None}, ind=question['id'], op='project_in')
+        mqs.append(mq)
+    return mqs
+
+
+  def add_another_union(self, question1: Dict, question2: Dict) -> List[MultihopQuestion]:
+    fir_q = question1['question']
+    fir_a = question1['answers']
+    sec_q = question2['question']
+    sec_a = question2['answers']
+    mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
+                          {'q': None, 'a': None}, ind=question1['id'] + '|' + question2['id'], op='union')
+    return [mq]
+
+
+  def add_another_intersection(self, question1: Dict, question2: Dict) -> List[MultihopQuestion]:
+    fir_q = question1['question']
+    fir_a = question1['answers']
+    sec_q = question2['question']
+    sec_a = question2['answers']
+    mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
+                          {'q': None, 'a': None}, ind=question1['id'] + '&' + question2['id'], op='union')
+    return [mq]
+
+
   def extend(self, question: Dict, op: str, question2: Dict=None) -> List:
     if op == 'project_in':
-      return self.extend_project_in(question, sample_n=1)
+      return self.extend_project_in(question, sample_n=5, use_qa_pairs=True)
     if op == 'project_out':
       return self.extend_project_out(question, sample_n=2)
     if op == 'filter':
@@ -359,4 +476,14 @@ class SlingExtractor(object):
       return self.extend_union(question, question2)
     if op == 'intersection':
       return self.extend_intersection(question, question2)
+    raise NotImplementedError
+
+
+  def add_another(self, question: Dict, op: str, question2: Dict=None) -> List:
+    if op == 'project_in':
+      return self.add_another_project_in(question, sample_n=1)
+    if op == 'union':
+      return self.add_another_union(question, question2)
+    if op == 'intersection':
+      return self.add_another_intersection(question, question2)
     raise NotImplementedError

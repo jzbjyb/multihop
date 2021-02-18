@@ -41,7 +41,7 @@ def adaptive(pred1: str, pred2: str, gold_file: str, thres: float=0.0):
   print('em {:.2f} f1 {:.2f} total {}, no ret {:.2f}'.format(em / total * 100, f1 / total * 100, total, np.mean(uses) * 100))
 
 
-def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: List[str]):
+def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: List[str], action: str='extend'):
   set_ops = {'union', 'intersection'}
   count = 0
   build_index = len(set_ops & set(ops)) > 0
@@ -58,7 +58,12 @@ def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: L
         for a in question['answers']:
           ans2ques[a].append(question)
       for op in no_ops:
-        eqs = se.extend(question, op)
+        if action == 'extend':
+          eqs = se.extend(question, op)
+        elif action == 'add_another':
+          eqs = se.add_another(question, op)
+        else:
+          raise NotImplementedError
         for eq in eqs:
           fout.write(str(eq) + '\n')
           count += 1
@@ -74,7 +79,12 @@ def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: L
               continue
             used_question_pairs.add(key)
             for op in ops:
-              eqs = se.extend(q1, op, question2=q2)
+              if action == 'extend':
+                eqs = se.extend(q1, op, question2=q2)
+              elif action == 'add_another':
+                eqs = se.add_another(q1, op, question2=q2)
+              else:
+                raise NotImplementedError
               for eq in eqs:
                 fout.write(str(eq) + '\n')
                 count += 1
@@ -113,7 +123,7 @@ def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -429,8 +439,13 @@ if __name__ == '__main__':
     se = SlingExtractor()
     se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
     se.load_filter('wikidata_property_template.json')
+    se.load_single_hop_questions('/home/zhengbaj/tir4/exp/PAQ/PAQ/PAQ.filtered.jsonl')
     to_multihop(question_file, args.output, se,
-                ops=['project_in', 'project_out', 'filter', 'agg', 'superlative', 'union', 'intersection'])
+                ops=['project_in', 'project_out', 'filter', 'agg', 'superlative', 'union', 'intersection'],
+                action='extend')
+    to_multihop(question_file, args.output, se,
+                ops=['project_in', 'union', 'intersection'],
+                action='add_another')
 
   elif args.task == 'format':
     with open(args.input[0], 'r') as fin, \
@@ -456,4 +471,23 @@ if __name__ == '__main__':
         mh = mhq.multi_hop
         sfout.write(mh['q'] + '\n')
         tfout.write('\t'.join(mh['a']) + '\n')
+        ofout.write(op + '\n')
+
+  elif args.task == 'format_sh_mh':
+    tomultihop, addanother = args.input
+    with open(tomultihop, 'r') as tfin, \
+      open(addanother, 'r') as afin, \
+      open(args.output + '.sh', 'w') as sfout, \
+      open(args.output + '.op', 'w') as ofout:
+      for l in afin:
+        mhq = MultihopQuestion.fromstr(l)
+        op = mhq.kwargs['op']
+        sfout.write(mhq.single_hops[0]['q'] + ' ' + mhq.single_hops[1]['q'] + '\n')
+        ofout.write(op + '\n')
+      for l in tfin:
+        mhq = MultihopQuestion.fromstr(l)
+        op = mhq.kwargs['op']
+        if op not in {'filter', 'superlative'}:
+          continue
+        sfout.write(mhq.single_hops[0]['q'] + ' ' + mhq.single_hops[1]['q'] + '\n')
         ofout.write(op + '\n')
