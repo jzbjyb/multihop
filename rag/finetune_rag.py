@@ -224,13 +224,18 @@ class GenerativeQAModule(BaseTransformer):
         return lmap(str.strip, gen_text)
 
     @staticmethod
-    def convert_to_decoder_ids(ids: torch.LongTensor, mask: torch.LongTensor, model, max_source_length: int):
+    def convert_to_decoder_ids(ids: torch.LongTensor, mask: torch.LongTensor, model, max_source_length: int, use_mdr: bool=False):
         def truncate_multihop_question(question, max_doc_tokens: int = 64):
-            sep = model.config.doc_sep
-            questions = question.rsplit(sep, 1)
+            doc_sep = model.config.doc_sep
+            title_sep = model.config.title_sep
+            questions = question.rsplit(doc_sep, 1)
             if len(questions) <= 1:
                 return question
-            return ' '.join(questions[0].split(' ')[:max_doc_tokens]) + sep + questions[1]
+            if use_mdr:
+                question = (questions[1], questions[0].split(title_sep, 1)[-1])
+            else:
+                question = ' '.join(questions[0].split(' ')[:max_doc_tokens]) + doc_sep + questions[1]
+            return question
         strings = model.retriever.generator_tokenizer.batch_decode(ids, skip_special_tokens=True)
         strings = [truncate_multihop_question(s) for s in strings]
         ids = model.retriever.question_encoder_tokenizer.batch_encode_plus(

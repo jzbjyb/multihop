@@ -1,6 +1,51 @@
 from typing import Optional
 import torch
-from transformers import RagSequenceForGeneration
+import torch.nn as nn
+from transformers import RagSequenceForGeneration, AutoModel, AutoConfig
+
+
+class RobertaRetriever(nn.Module):
+  def __init__(self, model_name):
+    super().__init__()
+
+    config = AutoConfig.from_pretrained(model_name)
+    self.encoder = AutoModel.from_pretrained(model_name)
+    self.project = nn.Sequential(nn.Linear(config.hidden_size, config.hidden_size),
+                                 nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps))
+
+
+  def encode_seq(self, input_ids, mask):
+    cls_rep = self.encoder(input_ids, mask)[0][:, 0, :]
+    vector = self.project(cls_rep)
+    return vector
+
+
+  def forward(self,
+              input_ids: Optional[torch.Tensor] = None,
+              attention_mask: Optional[torch.Tensor] = None,
+              token_type_ids: Optional[torch.Tensor] = None,
+              inputs_embeds: Optional[torch.Tensor] = None,
+              output_attentions=None,
+              output_hidden_states=None,
+              return_dict=None,):
+    return [self.encode_seq(input_ids, attention_mask)]
+
+
+def load_saved(model, path, exact=True):
+  try:
+    state_dict = torch.load(path)
+  except:
+    state_dict = torch.load(path, map_location=torch.device('cpu'))
+
+  def filter(x):
+    return x[7:] if x.startswith('module.') else x
+
+  if exact:
+    state_dict = {filter(k): v for (k, v) in state_dict.items()}
+  else:
+    state_dict = {filter(k): v for (k, v) in state_dict.items() if filter(k) in model.state_dict()}
+  model.load_state_dict(state_dict, strict=False)  # TODO: embeddings.position_ids missing
+  return model
 
 
 class MyRagSequenceForGeneration(RagSequenceForGeneration):
@@ -150,3 +195,9 @@ class MyRagSequenceForGeneration(RagSequenceForGeneration):
 
     logprobs = torch.cat(logprobs, 0)
     return self._cat_and_pad(hypos, pad_token_id=self.config.generator.pad_token_id), logprobs
+
+
+  def load_question_encoder(self, question_encoder_path: str):
+    model = RobertaRetriever('roberta-base')
+    model = load_saved(model, question_encoder_path, exact=False)
+    self.rag.question_encoder = model

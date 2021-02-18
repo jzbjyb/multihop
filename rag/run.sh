@@ -27,4 +27,5 @@ CUDA_VISIBLE_DEVICES=${gpu} proxychains4 python eval_rag.py \
     --n_docs ${ndocs} \
     --eval_batch_size 128 \
     --print_predictions \
-    --recalculate
+    --recalculate \
+    --use_mdr

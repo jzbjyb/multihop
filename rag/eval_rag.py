@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from collections import defaultdict
 
-from transformers import BartForConditionalGeneration, RagRetriever, RagSequenceForGeneration, RagTokenForGeneration
+from transformers import BartForConditionalGeneration, RagRetriever, RagSequenceForGeneration, RagTokenForGeneration, AutoTokenizer
 from transformers import logging as transformers_logging
 
 
@@ -197,7 +197,7 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
             retrieved_doc_ids.append([doc_ids[i * n_docs:i * n_docs + n_docs].cpu().numpy().tolist() for i in range(len(strings) // n_docs)])
 
             if nh != args.retrieval_hop - 1:
-                input_ids, attention_mask = GenerativeQAModule.convert_to_decoder_ids(context_input_ids, context_attention_mask, rag_model, 128)  # TODO: add param
+                input_ids, attention_mask = GenerativeQAModule.convert_to_decoder_ids(context_input_ids, context_attention_mask, rag_model, 128, use_mdr=args.use_mdr)  # TODO: add param
 
         # generate
         hypos = []
@@ -352,6 +352,7 @@ def get_args():
         type=int,
         default=1
     )
+    parser.add_argument('--use_mdr', action='store_true')
     parser.add_argument("--k", default=1, type=int, help="k for the precision@k calculation")
     parser.add_argument(
         "--evaluation_set",
@@ -487,8 +488,14 @@ def main(args):
             model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
             model.retriever.index.dataset._format_type = None  # TODO: avoid bus error
+            if args.use_mdr:
+                # load question encoder from MDR
+                model.load_question_encoder('/home/jzb/node09/exp/multihop_dense_retrieval/models/q_encoder.pt')
+                # load tokenizer from MDR
+                model.retriever.question_encoder_tokenizer = AutoTokenizer.from_pretrained('roberta-base')
         else:
             model = model_class.from_pretrained(checkpoint, **model_kwargs)
+
         model.to(args.device)
 
         with open(args.evaluation_set, "r") as eval_file, \
