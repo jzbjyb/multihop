@@ -8,6 +8,8 @@ from collections import defaultdict
 import numpy as np
 from tqdm import tqdm
 from .multihop_question import MultihopQuestion
+from .stanford import StanfordNLP
+from .POSTree import POSTree
 
 
 random.seed(2021)
@@ -25,6 +27,7 @@ class SlingExtractor(object):
     'where': 'place',
     'which': 'one'
   }
+  STAT_PH = '**blank**'
 
   def load_kb(self, root_dir: str='local/data/e/wiki'):
     print('loading and indexing kb ...')
@@ -46,6 +49,10 @@ class SlingExtractor(object):
         self.property_names[frame.id].append(frame.name)
     print('found', str(len(self.property_names)), 'properties')
     print('took', (time.time() - start), 'sec')
+
+
+  def load_stanford_nlp(self):
+    self.stanford = StanfordNLP()
 
 
   def load_filter(self, filename: str):
@@ -143,7 +150,7 @@ class SlingExtractor(object):
 
 
   def question2statement(self, question: str) -> str:
-    print(question)
+    raw_q = question
     nq = None
     question = question.split(' ')
     first_word = question[0]
@@ -153,17 +160,51 @@ class SlingExtractor(object):
       if w in {'is', 'are', 'was', 'were', 'am'}:
         if i == 0:
           nq = ' '.join([self.WH2THAT[first_word], 'that'] + question[1:])
+          break
         else:
-          nq = ' '.join(question[1:i] + ['that'] + question[i:])
+          nq = ' '.join(question[1:i + 1] + ['that'] + question[i + 1:])
+          break
       elif w in {'do', 'did', 'does'}:
         if i == 0:
           nq = ' '.join([self.WH2THAT[first_word], 'that'] + question[2:])
+          break
         else:
-          nq = ' '.join(question[1:i] + ['that'] + question[i+1:])
+          nq = ' '.join(question[1:i + 1] + ['that'] + question[i + 2:])
+          break
+      elif w in {'that', 'which', 'who', 'where'}:  # another clause
+        break
     if nq is None:
       nq = ' '.join([self.WH2THAT[first_word], 'that'] + question[1:])
-    print(nq)
-    input()
+    return nq
+
+
+  def question2statement_parse(self, question: str, which: bool=False, keep_ph: bool=False) -> str:
+    question = question.strip()
+    if not question.endswith('?'):
+      question += '?'
+    q_toks = question.split(' ')
+    first_word = q_toks[0].lower()
+    if first_word not in self.WH_WORDS:
+      return None
+    parse = self.stanford.annotate(question)
+    try:
+      stat = POSTree(parse).adjust_order().replace('-lrb-', '(').replace('-rrb-', ')')
+    except:
+      return None
+    stat = stat.strip()
+    if keep_ph:
+      return stat
+    if not stat.startswith(self.STAT_PH):
+      return None
+    if stat.startswith(self.STAT_PH) or stat.endswith(self.STAT_PH):
+      stat = stat.replace(self.STAT_PH, '').strip()
+    else:
+      stat = stat.replace(' ' + self.STAT_PH + ' ', ' ').strip()
+    assert self.STAT_PH not in stat
+    if which:
+      nq = '{} {} {} {}'.format('which', self.WH2THAT[first_word], 'that', stat)
+    else:
+      nq = '{} {} {}'.format(self.WH2THAT[first_word], 'that', stat)
     return nq
 
 
@@ -190,7 +231,7 @@ class SlingExtractor(object):
           return mqs
         for sn in np.random.choice(list(self.ansent2qa[qe_wid]), min(sample_n, len(self.ansent2qa[qe_wid])), replace=False):
           fir_q, fir_a = self.qa_pairs[sn]
-          fir_stat = self.question2statement(fir_q)
+          fir_stat = self.question2statement_parse(fir_q)
           if fir_stat is None:
             continue
           sec_q = question['question']
@@ -258,7 +299,7 @@ class SlingExtractor(object):
     return mqs
 
 
-  def extend_filter(self, question: Dict, sample_n: int=1) -> List[MultihopQuestion]:
+  def extend_filter(self, question: Dict, sample_n: int=1, ques2stat: bool=False) -> List[MultihopQuestion]:
     def find_common_filter(prop_dict_li: List[Dict[str, List]]) -> List[Tuple[str, str, List[int]]]:
       com_pid_tailids = []
       if len(prop_dict_li) <= 0:
@@ -305,7 +346,13 @@ class SlingExtractor(object):
       pid, tailid, sub_inds = com_pid_tailids[sn]
       sec_q = 'Which one of the following {} {}: {}'.format(self.property_names[pid], self.kb[tailid].name, ', '.join(fir_a))
       sec_a = [fir_a[sub] for sub in sub_inds]
-      multi_q = '{} and {} {}'.format(fir_q, self.property_names[pid], self.kb[tailid].name)
+      if ques2stat:
+        stat = self.question2statement_parse(fir_q, which=True)
+        if stat is None:
+          continue
+        multi_q = '{} {} {}'.format(stat, self.property_names[pid], self.kb[tailid].name)
+      else:
+        multi_q = '{} and {} {}'.format(fir_q, self.property_names[pid], self.kb[tailid].name)
       multi_a = sec_a
       mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
                             {'q': multi_q, 'a': multi_a}, ind=question['id'], op='filter')
@@ -341,7 +388,7 @@ class SlingExtractor(object):
     return mqs
 
 
-  def extend_superlative(self, question: Dict, sample_n: int = 1) -> List[MultihopQuestion]:
+  def extend_superlative(self, question: Dict, sample_n: int = 1, ques2stat: bool=False) -> List[MultihopQuestion]:
     sup2word = {'max': 'latest', 'min': 'earliest'}
 
     def find_superlative(prop_dict_li: List[Dict[str, List]]) -> List[Tuple[str, str, List[int]]]:
@@ -388,7 +435,13 @@ class SlingExtractor(object):
       pid, sup, sub_inds = com_pid_tailids[sn]
       sec_q = 'Which one of the following {} {}: {}'.format(self.property_names[pid], sup2word[sup], ', '.join(fir_a))
       sec_a = [fir_a[sub] for sub in sub_inds]
-      multi_q = '{} and {} {}'.format(fir_q, self.property_names[pid], sup2word[sup])
+      if ques2stat:
+        stat = self.question2statement_parse(fir_q, which=True)
+        if stat is None:
+          continue
+        multi_q = '{} {} {}'.format(stat, self.property_names[pid], sup2word[sup])
+      else:
+        multi_q = '{} and {} {}'.format(fir_q, self.property_names[pid], sup2word[sup])
       multi_a = sec_a
       mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
                             {'q': multi_q, 'a': multi_a}, ind=question['id'], op='superlative')
@@ -396,12 +449,21 @@ class SlingExtractor(object):
     return mqs
 
 
-  def extend_intersection(self, question1: Dict, question2: Dict) -> List[MultihopQuestion]:
+  def extend_intersection(self, question1: Dict, question2: Dict, ques2stat: bool=False) -> List[MultihopQuestion]:
     fir_q = question1['question']
     fir_a = question1['answers']
     sec_q = question2['question']
     sec_a = question2['answers']
-    multi_q = '{} and {}'.format(fir_q, sec_q)
+    if ques2stat:
+      fir_stat = self.question2statement_parse(fir_q, which=True)
+      sec_stat = self.question2statement_parse(sec_q, keep_ph=True)
+      if fir_stat is None or sec_stat is None:
+        return []
+      if not sec_stat.startswith(self.STAT_PH):
+        return []
+      multi_q = sec_stat.replace(self.STAT_PH, fir_stat)
+    else:
+      multi_q = '{} and {}'.format(fir_q, sec_q)
     multi_a = list(set(fir_a) & set(sec_a))
     mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
                           {'q': multi_q, 'a': multi_a}, ind=question1['id'] + '&' + question2['id'], op='intersection')
@@ -467,15 +529,15 @@ class SlingExtractor(object):
     if op == 'project_out':
       return self.extend_project_out(question, sample_n=2)
     if op == 'filter':
-      return self.extend_filter(question, sample_n=5)
+      return self.extend_filter(question, sample_n=5, ques2stat=True)
     if op == 'agg':
       return self.extend_agg(question, sample_n=1)
     if op == 'superlative':
-      return self.extend_superlative(question, sample_n=2)
+      return self.extend_superlative(question, sample_n=2, ques2stat=True)
     if op == 'union':
       return self.extend_union(question, question2)
     if op == 'intersection':
-      return self.extend_intersection(question, question2)
+      return self.extend_intersection(question, question2, ques2stat=True)
     raise NotImplementedError
 
 

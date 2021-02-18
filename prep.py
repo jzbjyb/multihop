@@ -8,6 +8,7 @@ import numpy as np
 import spacy
 import truecase
 from tqdm import tqdm
+import os
 import matplotlib.pyplot as plot
 from dataset import Break, HoptopQA, WebQeustion, ComplexWebQuestion, SlingExtractor, MultihopQuestion
 from rag.utils_rag import exact_match_score, f1_score
@@ -440,6 +441,8 @@ if __name__ == '__main__':
     se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
     se.load_filter('wikidata_property_template.json')
     se.load_single_hop_questions('/home/zhengbaj/tir4/exp/PAQ/PAQ/PAQ.filtered.jsonl')
+    os.environ['STANFORD_HOME'] = '/home/zhengbaj/tir4/stanford'
+    se.load_stanford_nlp()
     to_multihop(question_file, args.output, se,
                 ops=['project_in', 'project_out', 'filter', 'agg', 'superlative', 'union', 'intersection'],
                 action='extend')
