@@ -9,6 +9,7 @@ import spacy
 import truecase
 from tqdm import tqdm
 import os
+import csv
 import matplotlib.pyplot as plot
 from dataset import Break, HoptopQA, WebQeustion, ComplexWebQuestion, SlingExtractor, MultihopQuestion
 from rag.utils_rag import exact_match_score, f1_score
@@ -124,7 +125,7 @@ def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh', 'dict2csv'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -494,3 +495,13 @@ if __name__ == '__main__':
           continue
         sfout.write(mhq.single_hops[0]['q'] + ' ' + mhq.single_hops[1]['q'] + '\n')
         ofout.write(op + '\n')
+
+  elif args.task == 'dict2csv':
+    num_docs = 5233329
+    with open(args.input[0], 'r') as fin, open(args.output, 'w', newline='') as fout:
+      csvwriter = csv.writer(fout, delimiter='\t')
+      data = json.load(fin)
+      for i in range(num_docs):
+        d = data[str(i)]
+        title, text = d['title'], d['text']
+        csvwriter.writerow([title, text])

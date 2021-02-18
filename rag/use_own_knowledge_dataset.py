@@ -5,9 +5,10 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import List, Optional
-
+import numpy as np
+import csv
 import torch
-from datasets import Features, Sequence, Value, load_dataset
+from datasets import Features, Sequence, Value, load_dataset, Dataset
 
 import faiss
 from transformers import (
@@ -51,6 +52,12 @@ def embed(documents: dict, ctx_encoder: DPRContextEncoder, ctx_tokenizer: DPRCon
     return {"embeddings": embeddings.detach().cpu().numpy()}
 
 
+def get_emb(documents: dict, idx: int, emb_matrix):
+    r = {'embeddings': emb_matrix[idx]}
+    print(idx, r)
+    return r
+
+
 def main(
     rag_example_args: "RagExampleArguments",
     processing_args: "ProcessingArguments",
@@ -69,28 +76,53 @@ def main(
     # Let's say you have documents in tab-separated csv files with columns "title" and "text"
     assert os.path.isfile(rag_example_args.csv_path), "Please provide a valid path to a csv file"
 
+    first_topk = 1000000
+    print('load documents')
     # You can load a Dataset object this way
-    dataset = load_dataset(
-        "csv", data_files=[rag_example_args.csv_path], split="train", delimiter="\t", column_names=["title", "text"]
-    )
+    #dataset = load_dataset(
+    #    "csv", data_files=[rag_example_args.csv_path], split="train", delimiter="\t", column_names=["title", "text"]
+    #)
+    titles = []
+    texts = []
+    with open(rag_example_args.csv_path, 'r') as fin:
+        spamreader = csv.reader(fin, delimiter='\t')
+        for row in spamreader:
+            titles.append(row[0])
+            texts.append(row[1])
+            if first_topk and len(titles) >= first_topk:
+                break
 
     # More info about loading csv files in the documentation: https://huggingface.co/docs/datasets/loading_datasets.html?highlight=csv#csv-files
 
     # Then split the documents into passages of 100 words
-    dataset = dataset.map(split_documents, batched=True, num_proc=processing_args.num_proc)
+    #dataset = dataset.map(split_documents, batched=True, num_proc=processing_args.num_proc)
 
+    print('load embeddings')
+    emb_matrix = np.load('/home/jzb/node09/exp/multihop_dense_retrieval/data/hotpot_index/wiki_index.npy').astype('float32')
+    if first_topk:
+        emb_matrix = emb_matrix[:first_topk]
+
+    print('add embeddings')
+    new_features = Features(
+        {"text": Value("string"), "title": Value("string"), "embeddings": Sequence(Value("float32"))}
+    )
+    dataset = Dataset.from_dict({'title': titles, 'text': texts, 'embeddings': emb_matrix}, features=new_features)
+
+    '''
     # And compute the embeddings
-    ctx_encoder = DPRContextEncoder.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name).to(device=device)
-    ctx_tokenizer = DPRContextEncoderTokenizerFast.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name)
+    #ctx_encoder = DPRContextEncoder.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name).to(device=device)
+    #ctx_tokenizer = DPRContextEncoderTokenizerFast.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name)
     new_features = Features(
         {"text": Value("string"), "title": Value("string"), "embeddings": Sequence(Value("float32"))}
     )  # optional, save as float32 instead of float64 to save space
     dataset = dataset.map(
-        partial(embed, ctx_encoder=ctx_encoder, ctx_tokenizer=ctx_tokenizer),
+        partial(get_emb, emb_matrix=emb_matrix),
         batched=True,
         batch_size=processing_args.batch_size,
         features=new_features,
+        with_indices=True
     )
+    '''
 
     # And finally save your dataset
     passages_path = os.path.join(rag_example_args.output_dir, "my_knowledge_dataset")
@@ -110,6 +142,7 @@ def main(
     index_path = os.path.join(rag_example_args.output_dir, "my_knowledge_dataset_hnsw_index.faiss")
     dataset.get_index("embeddings").save(index_path)
     # dataset.load_faiss_index("embeddings", index_path)  # to reload the index
+    return
 
     ######################################
     logger.info("Step 3 - Load RAG")
@@ -186,7 +219,7 @@ class IndexHnswArguments:
         metadata={"help": "The dimension of the embeddings to pass to the HNSW Faiss index."},
     )
     m: int = field(
-        default=128,
+        default=512,
         metadata={
             "help": "The number of bi-directional links created for every new element during the HNSW index construction."
         },

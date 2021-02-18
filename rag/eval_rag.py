@@ -484,7 +484,11 @@ def main(args):
             if args.eval_mode == 'e2ec':
                 retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
             else:
-                retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
+                #retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
+                retriever = RagRetriever.from_pretrained(
+                    'facebook/rag-sequence-base', index_name='custom',
+                    passages_path='/home/jzb/node09/exp/multihop_dense_retrieval/data/hotpot_dataset/my_knowledge_dataset',
+                    index_path='/home/jzb/node09/exp/multihop_dense_retrieval/data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss')
             model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
             model.retriever.index.dataset._format_type = None  # TODO: avoid bus error
