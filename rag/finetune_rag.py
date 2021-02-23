@@ -57,6 +57,7 @@ from utils_rag import (  # noqa: E402 # isort:skip
     set_extra_model_params,
     Seq2SeqDataset,
 )
+from rag_model import MyRagSequenceForGeneration
 
 # need the parent dir module
 sys.path.insert(2, str(Path(__file__).resolve().parents[1]))
@@ -67,6 +68,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 transformers_logging.set_verbosity_info()
+root_to_mdr = '/home/jzb/node09/exp/multihop_dense_retrieval'
 
 
 class AttrDict(dict):
@@ -126,6 +128,7 @@ class GenerativeQAModule(BaseTransformer):
         self.is_rag_model = is_rag_model(hparams.model_type)
         self.retrieval_mode = hparams.retrieval_mode
         self.retrieval_hop = hparams.retrieval_hop
+        self.use_mdr = hparams.use_mdr
 
         config_class = RagConfig if self.is_rag_model else AutoConfig
         config = config_class.from_pretrained(hparams.model_name_or_path)
@@ -145,7 +148,13 @@ class GenerativeQAModule(BaseTransformer):
             config.label_smoothing = hparams.label_smoothing
             hparams, config.generator = set_extra_model_params(extra_model_params, hparams, config.generator)
             if hparams.distributed_retriever == "pytorch":
-                retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))  # TODO: debug
+                if self.use_mdr:
+                    retriever = RagPyTorchDistributedRetriever.from_pretrained(
+                        'facebook/rag-sequence-base', index_name='custom',
+                        passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset'),
+                        index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss'))
+                else:
+                    retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))
                 #retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', index_name='exact', use_dummy_dataset=True)
                 #retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
             elif hparams.distributed_retriever == "ray":
@@ -155,6 +164,11 @@ class GenerativeQAModule(BaseTransformer):
                 )
             retriever.config.max_combined_length = hparams.max_combined_length  # need to be smaller for multihop training
             model = self.model_class.from_pretrained(hparams.model_name_or_path, config=config, retriever=retriever)
+            if self.use_mdr:
+                # load question encoder from MDR
+                MyRagSequenceForGeneration.load_question_encoder(model, os.path.join(root_to_mdr, 'models/q_encoder.pt'))
+                # load tokenizer from MDR
+                model.retriever.question_encoder_tokenizer = AutoTokenizer.from_pretrained('roberta-base')
             prefix = config.question_encoder.prefix
         else:
             if hparams.prefix is not None:
@@ -320,7 +334,7 @@ class GenerativeQAModule(BaseTransformer):
             # TODO: documents too long might truncate questions
             if nh != num_hop - 1:
                 source_ids, source_mask = self.convert_to_decoder_ids(
-                    context_input_ids, context_attention_mask, self.model, self.hparams.max_source_length)
+                    context_input_ids, context_attention_mask, self.model, self.hparams.max_source_length, use_mdr=args.use_mdr)
 
             # loss for the current hop
             gen_outputs = model.generator(
@@ -675,6 +689,7 @@ class GenerativeQAModule(BaseTransformer):
             type=int,
             default=300
         )
+        parser.add_argument('--use_mdr', action='store_true')
         return parser
 
     @staticmethod

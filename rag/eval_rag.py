@@ -21,7 +21,7 @@ from transformers import logging as transformers_logging
 sys.path.append(os.path.join(os.getcwd()))  # noqa: E402 # isort:skip
 from utils_rag import exact_match_score, f1_score  # noqa: E402 # isort:skip
 from rag_model import MyRagSequenceForGeneration
-from finetune_rag import GenerativeQAModule
+from finetune_rag import GenerativeQAModule, root_to_mdr
 
 
 logger = logging.getLogger(__name__)
@@ -484,17 +484,19 @@ def main(args):
             if args.eval_mode == 'e2ec':
                 retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
             else:
-                #retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
-                retriever = RagRetriever.from_pretrained(
-                    'facebook/rag-sequence-base', index_name='custom',
-                    passages_path='/home/jzb/node09/exp/multihop_dense_retrieval/data/hotpot_dataset/my_knowledge_dataset',
-                    index_path='/home/jzb/node09/exp/multihop_dense_retrieval/data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss')
+                if args.use_mdr:
+                    retriever = RagRetriever.from_pretrained(
+                        'facebook/rag-sequence-base', index_name='custom',
+                        passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset'),
+                        index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss'))
+                else:
+                    retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
             model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
             model.retriever.index.dataset._format_type = None  # TODO: avoid bus error
             if args.use_mdr:
                 # load question encoder from MDR
-                model.load_question_encoder('/home/jzb/node09/exp/multihop_dense_retrieval/models/q_encoder.pt')
+                MyRagSequenceForGeneration.load_question_encoder(model, os.path.join(root_to_mdr, 'models/q_encoder.pt'))
                 # load tokenizer from MDR
                 model.retriever.question_encoder_tokenizer = AutoTokenizer.from_pretrained('roberta-base')
         else:

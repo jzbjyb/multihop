@@ -46,4 +46,5 @@ CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --retrieval_mode ${mode} \
     --retrieval_hop ${hop} \
     --max_combined_length ${max_combined_length} \
-    --distributed-port ${port}
+    --distributed-port ${port} \
+    --use_mdr

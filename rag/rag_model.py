@@ -2,6 +2,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from transformers import RagSequenceForGeneration, AutoModel, AutoConfig
+from transformers.models.dpr.modeling_dpr import DPRQuestionEncoderOutput
 
 
 class RobertaRetriever(nn.Module):
@@ -28,7 +29,10 @@ class RobertaRetriever(nn.Module):
               output_attentions=None,
               output_hidden_states=None,
               return_dict=None,):
-    return [self.encode_seq(input_ids, attention_mask)]
+    pooled = self.encode_seq(input_ids, attention_mask)
+    if not return_dict:
+      return [pooled]
+    return DPRQuestionEncoderOutput(pooler_output=pooled, hidden_states=None, attentions=None)  # TODO: replace none
 
 
 def load_saved(model, path, exact=True):
@@ -197,7 +201,8 @@ class MyRagSequenceForGeneration(RagSequenceForGeneration):
     return self._cat_and_pad(hypos, pad_token_id=self.config.generator.pad_token_id), logprobs
 
 
-  def load_question_encoder(self, question_encoder_path: str):
+  @staticmethod
+  def load_question_encoder(rag_model, question_encoder_path: str):
     model = RobertaRetriever('roberta-base')
     model = load_saved(model, question_encoder_path, exact=False)
-    self.rag.question_encoder = model
+    rag_model.rag.question_encoder = model
