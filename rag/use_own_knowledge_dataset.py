@@ -24,6 +24,7 @@ from transformers import (
 logger = logging.getLogger(__name__)
 torch.set_grad_enabled(False)
 device = "cuda" if torch.cuda.is_available() else "cpu"
+emb_matrix = {'data': None, 'load_size': 1000000, 'current_ind': -1000000}
 
 
 def split_text(text: str, n=100, character=" ") -> List[str]:
@@ -52,9 +53,19 @@ def embed(documents: dict, ctx_encoder: DPRContextEncoder, ctx_tokenizer: DPRCon
     return {"embeddings": embeddings.detach().cpu().numpy()}
 
 
-def get_emb(documents: dict, idx: int, emb_matrix):
-    r = {'embeddings': emb_matrix[idx]}
-    print(idx, r)
+def get_emb(documents: dict, idx: List[int]):
+    s = emb_matrix['load_size']
+    first = emb_matrix['current_ind']
+    last = first + s
+    fi = idx[0] if type(idx) is list else idx
+    if fi >= last:  # out of bound
+        print('refresh embedding from {} to {} ...'.format(last, last + s))
+        emb_matrix['data'] = np.load('/home/jzb/node09/exp/multihop_dense_retrieval/data/hotpot_index/wiki_index.npy').astype('float32')[last:last + s]
+        emb_matrix['current_ind'] = last
+    first = emb_matrix['current_ind']
+    if type(idx) is list:
+        idx = np.array(idx)
+    r = {'embeddings': emb_matrix['data'][idx - first]}
     return r
 
 
@@ -76,12 +87,12 @@ def main(
     # Let's say you have documents in tab-separated csv files with columns "title" and "text"
     assert os.path.isfile(rag_example_args.csv_path), "Please provide a valid path to a csv file"
 
-    first_topk = 1000000
     print('load documents')
     # You can load a Dataset object this way
-    #dataset = load_dataset(
-    #    "csv", data_files=[rag_example_args.csv_path], split="train", delimiter="\t", column_names=["title", "text"]
-    #)
+    dataset = load_dataset(
+        "csv", data_files=[rag_example_args.csv_path], split="train", delimiter="\t", column_names=["title", "text"]
+    )
+    '''
     titles = []
     texts = []
     with open(rag_example_args.csv_path, 'r') as fin:
@@ -89,8 +100,9 @@ def main(
         for row in spamreader:
             titles.append(row[0])
             texts.append(row[1])
-            if first_topk and len(titles) >= first_topk:
+            if emb_matrix['load_size'] and len(titles) >= emb_matrix['load_size']:
                 break
+    '''
 
     # More info about loading csv files in the documentation: https://huggingface.co/docs/datasets/loading_datasets.html?highlight=csv#csv-files
 
@@ -98,17 +110,16 @@ def main(
     #dataset = dataset.map(split_documents, batched=True, num_proc=processing_args.num_proc)
 
     print('load embeddings')
-    emb_matrix = np.load('/home/jzb/node09/exp/multihop_dense_retrieval/data/hotpot_index/wiki_index.npy').astype('float32')
-    if first_topk:
-        emb_matrix = emb_matrix[:first_topk]
+    get_emb(None, 0)  # warm up
 
+    '''
     print('add embeddings')
     new_features = Features(
         {"text": Value("string"), "title": Value("string"), "embeddings": Sequence(Value("float32"))}
     )
-    dataset = Dataset.from_dict({'title': titles, 'text': texts, 'embeddings': emb_matrix}, features=new_features)
-
+    dataset = Dataset.from_dict({'title': titles, 'text': texts, 'embeddings': emb_matrix['data']}, features=new_features)
     '''
+
     # And compute the embeddings
     #ctx_encoder = DPRContextEncoder.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name).to(device=device)
     #ctx_tokenizer = DPRContextEncoderTokenizerFast.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name)
@@ -116,13 +127,12 @@ def main(
         {"text": Value("string"), "title": Value("string"), "embeddings": Sequence(Value("float32"))}
     )  # optional, save as float32 instead of float64 to save space
     dataset = dataset.map(
-        partial(get_emb, emb_matrix=emb_matrix),
+        get_emb,
         batched=True,
         batch_size=processing_args.batch_size,
         features=new_features,
         with_indices=True
     )
-    '''
 
     # And finally save your dataset
     passages_path = os.path.join(rag_example_args.output_dir, "my_knowledge_dataset")
@@ -205,7 +215,7 @@ class ProcessingArguments:
         },
     )
     batch_size: int = field(
-        default=16,
+        default=1000,
         metadata={
             "help": "The batch size to use when computing the passages embeddings using the DPR context encoder."
         },
