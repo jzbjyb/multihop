@@ -125,7 +125,7 @@ def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh', 'dict2csv'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh', 'dict2csv'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -136,6 +136,14 @@ if __name__ == '__main__':
 
   if args.task == 'eval':
     get_scores(None, preds_path=args.input[0], gold_data_path=args.input[1], question_data_path=args.input[2])
+
+  elif args.task == 'convert_hotpotqa':
+    hotpotqa = HoptopQA('/home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa')
+    with open(args.output + '.id', 'w') as fout, open(args.output + '.source', 'w') as sfout, open(args.output + '.target', 'w') as tfout:
+      for id, item in getattr(hotpotqa, args.split).items():
+        fout.write('{}\n'.format(id))
+        sfout.write('{}\n'.format(item['question']))
+        tfout.write('{}\n'.format(item['answer']))
 
   elif args.task == 'hotpotqa':
     break_dataset = Break('/home/jzb/exp/Break/break_dataset/QDMR-high-level')

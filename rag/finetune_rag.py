@@ -129,6 +129,7 @@ class GenerativeQAModule(BaseTransformer):
         self.retrieval_mode = hparams.retrieval_mode
         self.retrieval_hop = hparams.retrieval_hop
         self.use_mdr = hparams.use_mdr
+        self.fix_retriever = hparams.fix_retriever
 
         config_class = RagConfig if self.is_rag_model else AutoConfig
         config = config_class.from_pretrained(hparams.model_name_or_path)
@@ -289,6 +290,8 @@ class GenerativeQAModule(BaseTransformer):
         for nh in range(num_hop):
             question_enc_outputs = model.question_encoder(source_ids, attention_mask=source_mask, return_dict=True)
             question_encoder_last_hidden_state = question_enc_outputs[0]  # hidden states of question encoder
+            if self.fix_retriever:
+                question_encoder_last_hidden_state = question_encoder_last_hidden_state.detach()
 
             retriever_outputs = model.retriever(
                 source_ids,
@@ -690,6 +693,7 @@ class GenerativeQAModule(BaseTransformer):
             default=300
         )
         parser.add_argument('--use_mdr', action='store_true')
+        parser.add_argument('--fix_retriever', action='store_true')
         return parser
 
     @staticmethod
