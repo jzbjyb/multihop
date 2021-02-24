@@ -42,7 +42,11 @@ def load_saved(model, path, exact=True):
     state_dict = torch.load(path, map_location=torch.device('cpu'))
 
   def filter(x):
-    return x[7:] if x.startswith('module.') else x
+    if x.startswith('rag.question_encoder.'):
+      return x[21:]
+    if x.startswith('module.'):
+      return x[7:]
+    return x
 
   if exact:
     state_dict = {filter(k): v for (k, v) in state_dict.items()}

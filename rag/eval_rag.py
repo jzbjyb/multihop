@@ -496,7 +496,10 @@ def main(args):
             model.retriever.index.dataset._format_type = None  # TODO: avoid bus error
             if args.use_mdr:
                 # load question encoder from MDR
-                MyRagSequenceForGeneration.load_question_encoder(model, os.path.join(root_to_mdr, 'models/q_encoder.pt'))
+                if checkpoint.startswith('facebook'):  # official model
+                    MyRagSequenceForGeneration.load_question_encoder(model, os.path.join(root_to_mdr, 'models/q_encoder.pt'))
+                else:
+                    MyRagSequenceForGeneration.load_question_encoder(model, os.path.join(checkpoint, 'pytorch_model.bin'))
                 # load tokenizer from MDR
                 model.retriever.question_encoder_tokenizer = AutoTokenizer.from_pretrained('roberta-base')
         else:
