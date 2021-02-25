@@ -130,6 +130,7 @@ class GenerativeQAModule(BaseTransformer):
         self.retrieval_hop = hparams.retrieval_hop
         self.use_mdr = hparams.use_mdr
         self.fix_retriever = hparams.fix_retriever
+        self.fix_generator = hparams.fix_generator
 
         config_class = RagConfig if self.is_rag_model else AutoConfig
         config = config_class.from_pretrained(hparams.model_name_or_path)
@@ -183,6 +184,8 @@ class GenerativeQAModule(BaseTransformer):
             if self.is_rag_model
             else AutoTokenizer.from_pretrained(hparams.model_name_or_path)
         )
+        if self.use_mdr:
+            tokenizer.question_encoder = AutoTokenizer.from_pretrained('roberta-base')
 
         super().__init__(hparams, config=config, tokenizer=tokenizer, model=model)
 
@@ -350,6 +353,9 @@ class GenerativeQAModule(BaseTransformer):
                 output_attentions=output_attentions,
                 return_dict=True,
             )
+            if self.fix_generator:
+                gen_outputs.logits = gen_outputs.logits.detach()
+
             loss += model.get_nll(
                 gen_outputs.logits,
                 prev_doc_scores,
@@ -694,6 +700,7 @@ class GenerativeQAModule(BaseTransformer):
         )
         parser.add_argument('--use_mdr', action='store_true')
         parser.add_argument('--fix_retriever', action='store_true')
+        parser.add_argument('--fix_generator', action='store_true')
         return parser
 
     @staticmethod
