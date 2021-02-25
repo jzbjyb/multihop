@@ -149,7 +149,7 @@ class SlingExtractor(object):
     return None
 
 
-  def iter_property(self, wid: str, type: str='can'):
+  def iter_property(self, wid: str, type: str='can', shuffle: bool=False):
     tup_li: List[Tuple] = []
     for prop, tail in self.kb[wid]:
       tup = self.get_canonical_property(prop, tail)
@@ -166,7 +166,21 @@ class SlingExtractor(object):
     group = defaultdict(list)
     for k, v in tup_li:
       group[k].append(v)
-    return list(group.items())
+    result = list(group.items())
+    if shuffle:
+      np.random.shuffle(result)
+    return result
+
+
+  def recursive_iter_property(self, wid: str, hop: int=2):
+    for pid, eids in self.iter_property(wid, type='can', shuffle=True):
+      if len(eids) > 1:
+        continue
+      for ppid, eeids in self.iter_property(eids[0], type='can', shuffle=True):
+        if len(eeids) > 1:
+          continue
+        return pid, eids[0], ppid, eeids[0]
+    return (None,) * 4
 
 
   def question2statement(self, question: str) -> str:

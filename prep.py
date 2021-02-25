@@ -43,6 +43,48 @@ def adaptive(pred1: str, pred2: str, gold_file: str, thres: float=0.0):
   print('em {:.2f} f1 {:.2f} total {}, no ret {:.2f}'.format(em / total * 100, f1 / total * 100, total, np.mean(uses) * 100))
 
 
+def traverse(se: SlingExtractor, outdir: str, max_id: int=50000, train_sample_num: int=10000, test_sample_num: int=2000):
+  used_entities = set()
+  train: List[Tuple] = []
+  test: List[Tuple] = []
+  pid2count: Dict[str, int] = defaultdict(lambda: 0)
+  os.makedirs(outdir, exist_ok=True)
+  with open(os.path.join(outdir, 'train.jsonl'), 'w') as trfout, open(os.path.join(outdir, 'test.jsonl'), 'w') as tefout:
+    for id in tqdm(np.random.choice(list(range(1, max_id)), train_sample_num, replace=False)):
+      id = 'Q{}'.format(id)
+      if se.kb[id] is None:
+        continue
+      pid1, eid1, pid2, eid2 = se.recursive_iter_property(id)
+      if pid1 is None:
+        continue
+      train.append((id, pid1, eid1, pid2, eid2))
+      used_entities.update({id, eid1, eid2})
+      pid2count[pid1] += 1
+      pid2count[pid2] += 1
+      j = {
+        'step_id': [id, pid1, eid1, pid2, eid2],
+        'step_name': [se.kb[id].name, se.property_names[pid1], se.kb[eid1].name, se.property_names[pid2], se.kb[eid2].name]}
+      trfout.write(json.dumps(j) + '\n')
+    for id in tqdm(np.random.choice(list(range(1, max_id)), test_sample_num, replace=False)):
+      id = 'Q{}'.format(id)
+      if se.kb[id] is None:
+        continue
+      pid1, eid1, pid2, eid2 = se.recursive_iter_property(id)
+      if pid1 is None:
+        continue
+      if len({id, eid1, eid2} & used_entities) > 0:
+        continue
+      test.append((id, pid1, eid1, pid2, eid2))
+      pid2count[pid1] += 1
+      pid2count[pid2] += 1
+      j = {
+        'step_id': [id, pid1, eid1, pid2, eid2],
+        'step_name': [se.kb[id].name, se.property_names[pid1], se.kb[eid1].name, se.property_names[pid2], se.kb[eid2].name]}
+      tefout.write(json.dumps(j) + '\n')
+    print('#train', len(train), '#test', len(test))
+    print(sorted(pid2count.items(), key=lambda x: -x[1])[:10])
+
+
 def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: List[str], action: str='extend'):
   set_ops = {'union', 'intersection'}
   count = 0
@@ -125,7 +167,7 @@ def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh', 'dict2csv'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh', 'dict2csv', 'format_traverse'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -513,3 +555,17 @@ if __name__ == '__main__':
         d = data[str(i)]
         title, text = d['title'], d['text']
         csvwriter.writerow([title, text])
+
+  elif args.task == 'format_traverse':
+    with open(args.input[0], 'r') as fin, \
+      open(args.output + '.source', 'w') as sfout, \
+      open(args.output + '.target', 'w') as tfout:
+      for l in fin:
+        l = json.loads(l)
+        s, p1, e1, p2, e2 = l['step_name']
+        sfout.write('{}: {}\n'.format(s, p1))
+        tfout.write('{}\n'.format(e1))
+        sfout.write('{}: {}\n'.format(e1, p2))
+        tfout.write('{}\n'.format(e2))
+        sfout.write('{}: {}, {}\n'.format(s, p1, p2))
+        tfout.write('{}\n'.format(e2))
