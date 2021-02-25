@@ -27,6 +27,26 @@ class SlingExtractor(object):
     'where': 'place',
     'which': 'one'
   }
+  TYPE2THAT = {
+    'CARDINAL': 'number',
+    'DATE': 'date',
+    'EVENT': 'event',
+    'FAC': 'facility',
+    'GPE': 'place',
+    'LANGUAGE': 'language',
+    'LAW': 'law',
+    'LOC': 'location',
+    'MONEY': 'money',
+    'NORP': 'group',
+    'ORDINAL': 'rank',
+    'ORG': 'organization',
+    'PERCENT': 'percent',
+    'PERSON': 'person',
+    'PRODUCT': 'product',
+    'QUANTITY': 'quantity',
+    'TIME': 'time',
+    'WORK_OF_ART': 'work'
+  }
   STAT_PH = '**blank**'
 
   def load_kb(self, root_dir: str='local/data/e/wiki'):
@@ -178,7 +198,7 @@ class SlingExtractor(object):
     return nq
 
 
-  def question2statement_parse(self, question: str, which: bool=False, keep_ph: bool=False) -> str:
+  def question2statement_parse(self, question: str, which: bool=False, keep_ph: bool=False, entity_type: str=None) -> str:
     question = question.strip()
     if not question.endswith('?'):
       question += '?'
@@ -201,10 +221,11 @@ class SlingExtractor(object):
     else:
       stat = stat.replace(' ' + self.STAT_PH + ' ', ' ').strip()
     assert self.STAT_PH not in stat
+    before_that = self.WH2THAT[first_word] if entity_type is None else self.TYPE2THAT[entity_type]
     if which:
-      nq = '{} {} {} {}'.format('which', self.WH2THAT[first_word], 'that', stat)
+      nq = '{} {} {} {}'.format('which', before_that, 'that', stat)
     else:
-      nq = '{} {} {}'.format(self.WH2THAT[first_word], 'that', stat)
+      nq = '{} {} {}'.format(before_that, 'that', stat)
     return nq
 
 
@@ -221,7 +242,7 @@ class SlingExtractor(object):
     mqs = []
     # replace entities in the question
     for qe in self.get_ner(question['question_entity'], sent=question['question'], last=True, only_one=True):
-      qe_mention, qe_start, qe_end, _ = qe
+      qe_mention, qe_start, qe_end, qe_type = qe
       qe_wikis = self.phrase.lookup(qe_mention)
       if len(qe_wikis) <= 0:
         return mqs
@@ -231,7 +252,7 @@ class SlingExtractor(object):
           return mqs
         for sn in np.random.choice(list(self.ansent2qa[qe_wid]), min(sample_n, len(self.ansent2qa[qe_wid])), replace=False):
           fir_q, fir_a = self.qa_pairs[sn]
-          fir_stat = self.question2statement_parse(fir_q)
+          fir_stat = self.question2statement_parse(fir_q, entity_type=qe_type)
           if fir_stat is None:
             continue
           sec_q = question['question']
