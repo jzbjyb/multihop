@@ -179,13 +179,20 @@ class GenerativeQAModule(BaseTransformer):
             model = self.model_class.from_pretrained(hparams.model_name_or_path, config=config)
             prefix = config.prefix
 
-        tokenizer = (
-            RagTokenizer.from_pretrained(hparams.model_name_or_path)
-            if self.is_rag_model
-            else AutoTokenizer.from_pretrained(hparams.model_name_or_path)
-        )
+
         if self.use_mdr:
+            tokenizer = (
+                RagTokenizer.from_pretrained('facebook/rag-sequence-nq')  # TODO: avoid bug
+                if self.is_rag_model
+                else AutoTokenizer.from_pretrained(hparams.model_name_or_path)
+            )
             tokenizer.question_encoder = AutoTokenizer.from_pretrained('roberta-base')
+        else:
+            tokenizer = (
+                RagTokenizer.from_pretrained(hparams.model_name_or_path)
+                if self.is_rag_model
+                else AutoTokenizer.from_pretrained(hparams.model_name_or_path)
+            )
 
         super().__init__(hparams, config=config, tokenizer=tokenizer, model=model)
 
