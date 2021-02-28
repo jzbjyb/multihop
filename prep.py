@@ -172,6 +172,7 @@ if __name__ == '__main__':
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
   parser.add_argument('--num_hops', type=int, default=2)
+  parser.add_argument('--num_para', type=int, default=1)
   parser.add_argument('--thres', type=float, default=.0)
   parser.add_argument('--no_context', action='store_true')
   args = parser.parse_args()
@@ -273,6 +274,7 @@ if __name__ == '__main__':
             if i not in stat:
               stat[i] = 0
           stat = sorted(stat.items())
+          print(stat)
           for i, (k, v) in enumerate(stat):
             if i % 2 == 0:
               print('{}'.format(v), end='')
@@ -284,6 +286,7 @@ if __name__ == '__main__':
 
     pred_file, source_file, target_file, add_file = args.input
     ems = []
+    ems_first = []
     groups = []
     cases = []
     cates = []
@@ -296,14 +299,26 @@ if __name__ == '__main__':
       addtion_res = lambda x: x
 
     with open(pred_file, 'r') as pfin, open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(add_file, 'r') as afin:
+      preds = []
+      sources = []
       for i, l in enumerate(pfin):
         pred = l.rstrip('\n').split('\t')[0]
         source = sfin.readline().strip()
+        preds.append(pred)
+        sources.append(source)
+        if i % args.num_para == args.num_para - 1:
+          pass
+        else:
+          continue
+        #sources = sources[:1]
+        #preds = preds[:1]
         targets = tfin.readline().rstrip('\n').split('\t')
         addition = afin.readline().rstrip('\n')
-        em = max(exact_match_score(pred, target) for target in targets)
+        em_li = [max(exact_match_score(pred, target) for target in targets) for pred in preds]
+        em = max(em_li)
         ems.append(em)
-        if i % len(numhops2temps[args.num_hops]) == 0:
+        ems_first.append(em_li[0])
+        if (i // args.num_para) % len(numhops2temps[args.num_hops]) == 0:
           groups.append([])
           cases.append([])
           if type(addtion_res) is ComplexWebQuestion:
@@ -314,7 +329,10 @@ if __name__ == '__main__':
             cates.append('')
         groups[-1].append(em)
         if numhops2temps[args.num_hops][i % len(numhops2temps[args.num_hops])] in {'n-*', '*-n', 'n-n'}:
-          cases[-1].append((source, targets, pred))
+          cases[-1].append((sources, targets, preds, em_li))
+        preds = []
+        sources = []
+    print('em {:.2f}, only first {:.2f}'.format(np.mean(ems) * 100, np.mean(ems_first) * 100))
     temps = numhops2temps[args.num_hops]
     groups = [dict(zip(temps, group)) for group in groups]
 
@@ -345,13 +363,35 @@ if __name__ == '__main__':
       for cate, cases in non_cate_case.items():
         fout.write('<h1>{}</h1>\n'.format(cate))
         for key, case in cases.items():
-          fout.write('<div><span>{}</span></div>\n'.format(key))
+          fout.write('<h2>{}</h2>\n'.format(key))
           shuffle(case)
+          fout.write('<h3>random cases</h3>\n')
           for c in case[:5]:
             fout.write('<br>\n')
-            for s, t, p in c:
-              s = s.split('\t')[0]
-              fout.write('<div>{}&nbsp;&nbsp;&nbsp;{}&nbsp;&nbsp;&nbsp;{}</div>'.format(s, t, p))
+            for s, t, p, e in c:
+              s = '<br>'.join([_s.split('\t')[0] for _s in s])
+              p = '&nbsp;&nbsp;&nbsp;'.join('{} ({})'.format(_p, _e) for _p, _e in zip(p, e))
+              t = '&nbsp;&nbsp;&nbsp;'.join(t)
+              fout.write('<div><div>Q: {}</div>\n<div style="padding-left: 80px;">G: {}</div>\n<div style="padding-left: 80px;">P: {}</div></div>'.format(s, t, p))
+          if args.num_para > 1:
+            fout.write('<h3>cases improved by paraphrases</h3>\n')
+            use_count = 0
+            for c in case:
+              use = False
+              for s, t, p, e in c:
+                if not e[0] and np.max(e[1:]):
+                  use = True
+              if not use:
+                continue
+              use_count += 1
+              fout.write('<br>\n')
+              for s, t, p, e in c:
+                s = '<br>'.join([_s.split('\t')[0] for _s in s])
+                p = '&nbsp;&nbsp;&nbsp;'.join('{} ({})'.format(_p, _e) for _p, _e in zip(p, e))
+                t = '&nbsp;&nbsp;&nbsp;'.join(t)
+                fout.write('<div><div>Q: {}</div>\n<div style="padding-left: 80px;">G: {}</div>\n<div style="padding-left: 80px;">P: {}</div></div>'.format(s, t, p))
+              if use_count >= 5:
+                break
           fout.write('<hr>\n')
 
   elif args.task == 'ner':
