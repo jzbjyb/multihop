@@ -157,8 +157,8 @@ class GenerativeQAModule(BaseTransformer):
                         index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss'))
                 else:
                     retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))
-                #retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', index_name='exact', use_dummy_dataset=True)
-                #retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
+                    #retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', index_name='exact', use_dummy_dataset=True)
+                    #retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
             elif hparams.distributed_retriever == "ray":
                 # The Ray retriever needs the handles to the retriever actors.
                 retriever = RagRayDistributedRetriever.from_pretrained(
@@ -168,7 +168,10 @@ class GenerativeQAModule(BaseTransformer):
             model = self.model_class.from_pretrained(hparams.model_name_or_path, config=config, retriever=retriever)
             if self.use_mdr:
                 # load question encoder from MDR
-                MyRagSequenceForGeneration.load_question_encoder(model, os.path.join(root_to_mdr, 'models/q_encoder.pt'))
+                if hparams.model_name_or_path.startswith('facebook'):  # official model
+                    MyRagSequenceForGeneration.load_question_encoder(model, os.path.join(root_to_mdr, 'models/q_encoder.pt'))
+                else:
+                    MyRagSequenceForGeneration.load_question_encoder(model, os.path.join(hparams.model_name_or_path, 'pytorch_model.bin'))
                 # load tokenizer from MDR
                 model.retriever.question_encoder_tokenizer = AutoTokenizer.from_pretrained('roberta-base')
             prefix = config.question_encoder.prefix
