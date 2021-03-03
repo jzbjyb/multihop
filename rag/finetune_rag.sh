@@ -4,7 +4,7 @@ export PYTHONPATH="../":"${PYTHONPATH}"
 # A sample finetuning run, you need to specify data_dir, output_dir and model_name_or_path
 # run ./examples/rag/finetune_rag.sh --help to see all the possible options
 
-DATA_DIR=nq_small
+DATA_DIR=nq_small  # /home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa/full_qa_small
 MODEL_NAME_OR_PATH=facebook/rag-sequence-nq  # facebook/rag-sequence-nq
 max_combined_length=200
 mode=$1
@@ -13,7 +13,7 @@ OUTPUT_DIR=$3  # models/rag_combine
 gpus=$4
 ngpus=$5
 port=$6
-batch_size=$(( 1*${ngpus} ))
+batch_size=4  # $(( 1*${ngpus} ))
 
 CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --data_dir $DATA_DIR \
@@ -39,8 +39,8 @@ CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --adam_epsilon 1e-08 \
     --max_grad_norm 0.1 \
     --lr_scheduler polynomial \
-    --learning_rate 3e-05 \
-    --num_train_epochs 3 \
+    --learning_rate 3e-06 \
+    --num_train_epochs 2 \
     --warmup_steps 500 \
     --gradient_accumulation_steps 1 \
     --retrieval_mode ${mode} \

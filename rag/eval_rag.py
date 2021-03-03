@@ -482,7 +482,7 @@ def main(args):
 
         if args.model_type.startswith("rag"):
             if args.eval_mode == 'e2ec':
-                retriever = RagRetriever.from_pretrained(checkpoint, index_name="exact", use_dummy_dataset=True)
+                retriever = RagRetriever.from_pretrained('facebook/rag-sequence-nq', index_name="exact", use_dummy_dataset=True)
             else:
                 if args.use_mdr:
                     retriever = RagRetriever.from_pretrained(
@@ -520,14 +520,16 @@ def main(args):
                     answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
                     preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                     preds_file.flush()
-                    write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
+                    if args.eval_mode == 'e2e':
+                        write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
                     questions = []
                     golds = []
             if len(questions) > 0:
                 answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
                 preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                 preds_file.flush()
-                write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
+                if args.eval_mode == 'e2e':
+                    write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
 
             score_fn(args, args.predictions_path, args.gold_data_path)
 
