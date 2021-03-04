@@ -1,5 +1,6 @@
 from typing import List, Dict, Any
 import json
+import truecase
 
 
 class MultihopQuestion(object):
@@ -10,12 +11,14 @@ class MultihopQuestion(object):
     self.kwargs = kwargs
     for sh in self.single_hops:
       sh['q'] = self.format_question(sh['q'])
+    self.multi_hop['q'] = self.format_question(self.multi_hop['q'])
 
 
   def format_question(self, question: str):
-    if question.strip().lower().startswith('return'):
-      return question
-    return question.strip().rstrip('?') + '?'
+    if not question.strip().lower().startswith('return'):
+      question = question.strip().rstrip('?') + '?'
+    question = truecase.get_true_case(question)
+    return question
 
 
   def __str__(self):

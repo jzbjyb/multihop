@@ -49,16 +49,20 @@ def write_to_file(batch, paras_li, fout, keep_size: int, dedup: bool=True):
   for source, paras in zip(batch, paras_li):
     if dedup:
       comb = [source]
+      comb_score = [0.0]
       for para in paras:
-        para = para['sentence'].strip('"')  # remove "
-        if para not in comb:
-          comb.append(para)
+        para_text = para['sentence'].strip('"')  # remove "
+        if para_text not in comb:
+          comb.append(para_text)
+          comb_score.append(para['score'])
       comb = comb * (len(paras) + 1)
+      comb_score = comb_score * (len(paras) + 1)
     else:
       comb = [source] + [para['sentence'] for para in paras]
+      comb_score = [0.0] + [para['score'] for para in paras]
     dup_count = keep_size - len(set(comb[:keep_size]))
     for i in range(keep_size):
-      fout.write(comb[i] + '\n')
+      fout.write('{}\t{}\n'.format(comb[i], comb_score[i]))
   return dup_count
 
 
@@ -68,14 +72,13 @@ if __name__ == '__main__':
     beam_size = 10
     keep_size = 5
 
-    '''
     bart = BartParaphraser('/home/jzb/exp/knowlm/rag/models/paraphrase/checkpoint_best.pt')
     batch = []
     dup_count = count = 0
     with open(source_file, 'r') as sfin, open(output_file + '.source', 'w') as fout:
       for l in tqdm(sfin):
         count += 1
-        batch.append(l.strip())
+        batch.append(l.strip().split('\t')[0])
         if len(batch) >= batch_size:
           paras_li = bart.generate(batch, beam_size=beam_size)
           dup_count += write_to_file(batch, paras_li, fout, keep_size=keep_size, dedup=True)
@@ -85,7 +88,6 @@ if __name__ == '__main__':
         dup_count += write_to_file(batch, paras_li, fout, keep_size=keep_size, dedup=True)
         batch = []
     print('total {}, dup {}'.format(count, dup_count))
-    '''
 
     with open(target_file, 'r') as tfin, open(output_file + '.target', 'w') as fout:
       for l in tqdm(tfin):

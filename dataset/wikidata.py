@@ -369,6 +369,8 @@ class SlingExtractor(object):
     aes = [self.get_ner(ae)[0] for ae in question['answers_entity']]
     aes_wiki = [self.phrase.lookup(ae[0]) for ae in aes]
     aes_wiki = [ae[0] for ae in aes_wiki if len(ae) > 0]  # some mentions might not have linking
+    if len(set(ae.id for ae in aes_wiki)) <= 1:  # only one entity
+      return mqs
     if len(aes_wiki) != len(aes):
       return mqs
     pss_wiki = [dict(self.iter_property(ae.id, type='can')) for ae in aes_wiki]
@@ -377,9 +379,10 @@ class SlingExtractor(object):
       return mqs
     fir_q = question['question']
     fir_a = question['answers']
+    fir_a_dedup = list(set(ae.name for ae in aes_wiki))
     for sn in np.random.choice(len(com_pid_tailids), min(sample_n, len(com_pid_tailids)), replace=False):
       pid, tailid, sub_inds = com_pid_tailids[sn]
-      sec_q = 'Which one of the following {} {}: {}'.format(self.property_names[pid], self.kb[tailid].name, ', '.join(fir_a))
+      sec_q = 'Which one of the following {} {}: {}'.format(self.property_names[pid], self.kb[tailid].name, ', '.join(fir_a_dedup))
       sec_a = [fir_a[sub] for sub in sub_inds]
       if ques2stat:
         stat = self.question2statement_parse(fir_q, which=True)
@@ -458,6 +461,8 @@ class SlingExtractor(object):
     aes = [self.get_ner(ae)[0] for ae in question['answers_entity']]
     aes_wiki = [self.phrase.lookup(ae[0]) for ae in aes]
     aes_wiki = [ae[0] for ae in aes_wiki if len(ae) > 0]  # some mentions might not have linking
+    if len(set(ae.id for ae in aes_wiki)) <= 1:  # only one entity
+      return mqs
     if len(aes_wiki) != len(aes):
       return mqs
     pss_wiki = [dict(self.iter_property(ae.id, type='time')) for ae in aes_wiki]
@@ -466,9 +471,10 @@ class SlingExtractor(object):
       return mqs
     fir_q = question['question']
     fir_a = question['answers']
+    fir_a_dedup = list(set(ae.name for ae in aes_wiki))
     for sn in np.random.choice(len(com_pid_tailids), min(sample_n, len(com_pid_tailids)), replace=False):
       pid, sup, sub_inds = com_pid_tailids[sn]
-      sec_q = 'Which one of the following {} {}: {}'.format(self.property_names[pid], sup2word[sup], ', '.join(fir_a))
+      sec_q = 'Which one of the following {} {}: {}'.format(self.property_names[pid], sup2word[sup], ', '.join(fir_a_dedup))
       sec_a = [fir_a[sub] for sub in sub_inds]
       if ques2stat:
         stat = self.question2statement_parse(fir_q, which=True)

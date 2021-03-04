@@ -133,6 +133,7 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
     do_deduplication = rag_model.config.do_deduplication
     num_doc_return_sequences = rag_model.config.num_return_sequences
     num_beams = args.num_beams
+    questions = [q.split('\t')[0] for q in questions]
     with torch.no_grad():
         inputs_dict = rag_model.retriever.question_encoder_tokenizer.batch_encode_plus(
             questions, return_tensors='pt', padding=True, truncation=True)

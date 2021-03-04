@@ -20,6 +20,7 @@ numhops2temps: Dict[int, List[str]] = {
   #2: ['n-*', 'p-*', '*-n', '*-p', 'n-n', 'n-p', 'p-n', 'p-p']
   2: ['n-*', '*-n', 'n-n']
 }
+i2ph = {0: 'XXX', 1: 'YYY', 2: 'ZZZ', 3: 'AAA', 4: 'BBB', 5: 'CCC', 6: 'DDD', 7: 'EEE', 8: 'FFF', 9: 'GGG', 10: 'HHH'}
 
 
 def nline_to_cate(nline: int, num_hops: int):
@@ -167,7 +168,7 @@ def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh', 'dict2csv', 'format_traverse'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace', 'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh', 'dict2csv', 'format_traverse'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
@@ -393,6 +394,52 @@ if __name__ == '__main__':
               if use_count >= 5:
                 break
           fout.write('<hr>\n')
+
+  elif args.task == 'ner_fill':
+    ori_file, para_file = args.input
+    num_para = 5
+    with open(ori_file, 'r') as ofin, open(para_file, 'r') as pfin, open(args.output, 'w') as fout:
+      for l in ofin:
+        ents = l.strip().split('\t')[1:]
+        for i in range(num_para):
+          p, s = pfin.readline().strip().split('\t')
+          for j in range(len(ents)):
+            p = p.replace(i2ph[j], ents[j])
+          fout.write('{}\t{}\n'.format(p, s))
+
+  elif args.task == 'ner_replace':
+    nlp = spacy.load('en_core_web_sm')
+    batch_size = 5000
+    skip_ner_types = {'DATE', 'TIME', 'PERCENT', 'MONEY', 'QUANTITY', 'ORDINAL', 'CARDINAL'}
+
+    def process_batch(li, fout):
+      docs = list(nlp.pipe(li, disable=['parser']))
+      for text, doc in zip(li, docs):
+        ents = [(ent.text, ent.start_char, ent.end_char, ent.label_) for ent in doc.ents if ent.label_ not in skip_ner_types]
+        ents = sorted(ents, key=lambda x: x[1])
+        new_text = []
+        ent_text = []
+        prev_ind = 0
+        for i, ent in enumerate(ents):
+          assert ent[1] >= prev_ind
+          new_text.append(text[prev_ind:ent[1]])
+          new_text.append(i2ph[i])
+          ent_text.append(ent[0])
+          prev_ind = ent[2]
+        new_text.append(text[prev_ind:])
+        new_text = ''.join(new_text)
+        fout.write('{}\t{}\n'.format(new_text, '\t'.join(ent_text)))
+
+    li = []
+    with open(args.input[0], 'r') as fin, open(args.output, 'w') as fout:
+      for l in tqdm(fin):
+        li.append(l.strip())
+        if len(li) < batch_size:
+          continue
+        process_batch(li, fout)
+        li = []
+      if len(li) > 0:
+        process_batch(li, fout)
 
   elif args.task == 'ner':
     nlp = spacy.load('en_core_web_sm')
