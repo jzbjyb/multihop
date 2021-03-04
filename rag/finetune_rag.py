@@ -135,6 +135,8 @@ class GenerativeQAModule(BaseTransformer):
         config_class = RagConfig if self.is_rag_model else AutoConfig
         config = config_class.from_pretrained(hparams.model_name_or_path)
         config.max_combined_length = hparams.max_combined_length  # need to be smaller for multihop training
+        if hparams.n_docs is not None:
+            config.n_docs = hparams.n_docs
 
         # set retriever parameters
         config.index_name = hparams.index_name or config.index_name
@@ -702,6 +704,11 @@ class GenerativeQAModule(BaseTransformer):
             '--retrieval_hop',
             type=int,
             default=1
+        )
+        parser.add_argument(
+            '--n_docs',
+            type=int,
+            default=None
         )
         parser.add_argument(
             '--max_combined_length',

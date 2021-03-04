@@ -1,48 +1,70 @@
-import sys
+import argparse
 from pathlib import Path
 from typing import List, Dict
+import torch
 import torch.nn as nn
-from fairseq.models.bart import BARTModel
+import torch.nn.functional as F
 from tqdm import tqdm
+from fairseq.models.bart import BARTModel
 
 
 class Paraphraser(nn.Module):
-    def generate(
-        self,
-        batch_source: List[str],
-        beam_size: int,
-        **kwargs
-    ) -> List[List[Dict]]:
-        raise NotImplementedError
+  def generate(
+    self,
+    batch_source: List[str],
+    beam_size: int,
+    **kwargs
+  ) -> List[List[Dict]]:
+    raise NotImplementedError
 
 
 class BartParaphraser(Paraphraser):
-    def __init__(
-        self,
-        model_path: str
-    ):
-        super().__init__()
-        model_path = Path(model_path)
-        self.model = BARTModel.from_pretrained(
-            str(model_path.parent),
-            checkpoint_file=str(model_path.name),
-        )
-        self.model.cuda()
-        self.model.eval()
+  def __init__(
+    self,
+    model_path: str
+  ):
+    super().__init__()
+    model_path = Path(model_path)
+    self.model = BARTModel.from_pretrained(str(model_path.parent), checkpoint_file=str(model_path.name))
+    self.model.cuda()
+    self.model.eval()
 
 
-    def generate(
-        self,
-        batch_source: List[str],
-        beam_size: int,
-        **kwargs
-    ) -> List[List[Dict]]:
-        hypotheses_batch = self.model.sample(
-            batch_source,
-            beam=beam_size,
-            **kwargs
-        )
-        return hypotheses_batch
+  def generate(
+    self,
+    batch_source: List[str],
+    beam_size: int,
+    **kwargs
+  ) -> List[List[Dict]]:
+    hypotheses_batch = self.model.sample(batch_source, beam=beam_size, **kwargs)
+    return hypotheses_batch
+
+
+  def eval_perp(self, batch_source: List[str], batch_target: List[str]):
+    pad_token_id = 1
+    # tokenization
+    source = [self.model.encode(s)[0] for s in batch_source]
+    source_len = torch.tensor([s.size(0) for s in source])
+    source = nn.utils.rnn.pad_sequence(source, batch_first=True, padding_value=pad_token_id)
+    target = [self.model.encode(s)[0] for s in batch_target]
+    target = nn.utils.rnn.pad_sequence(target, batch_first=True, padding_value=pad_token_id)
+    target_mask = target.ne(pad_token_id).float()
+    # forward
+    source = source.cuda()
+    source_len = source_len.cuda()
+    target = target.cuda()
+    target_mask = target_mask.cuda()
+    bs, seq_len = target.size()
+
+    logits = self.model.model(source, source_len, prev_output_tokens=target)[0]
+    lp = F.log_softmax(logits, dim=-1)
+    lp = lp[:, :-1].contiguous()  # remove the last position
+    target_shift = target[:, 1:].contiguous()  # remove the first token (bos)
+    target_mask_shift = target_mask[:, 1:].contiguous()
+    lp = torch.gather(lp.view(-1, lp.size(-1)), 1, target_shift.view(-1, 1)).view(bs, seq_len - 1)
+    lp = lp * target_mask_shift
+    slp = lp.sum(-1)
+    return slp
 
 
 def write_to_file(batch, paras_li, fout, keep_size: int, dedup: bool=True):
@@ -66,13 +88,28 @@ def write_to_file(batch, paras_li, fout, keep_size: int, dedup: bool=True):
   return dup_count
 
 
+def write_to_file_eval(f2t, t2f, fout):
+  for s1, s2 in zip(f2t, t2f):
+    fout.write('{}\t{}\n'.format(s1, s2))
+
+
 if __name__ == '__main__':
-    source_file, target_file, output_file = sys.argv[1:]
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--task', type=str, choices=['para', 'eval'], default='para')
+  parser.add_argument('--input', type=str, nargs='+')
+  parser.add_argument('--output', type=str)
+  args = parser.parse_args()
+
+  model_path = '/home/jzb/exp/knowlm/rag/models/paraphrase/checkpoint_best.pt'
+
+  if args.task == 'para':
+    source_file, target_file = args.input
+    output_file = args.output
     batch_size = 128
     beam_size = 10
     keep_size = 5
 
-    bart = BartParaphraser('/home/jzb/exp/knowlm/rag/models/paraphrase/checkpoint_best.pt')
+    bart = BartParaphraser(model_path)
     batch = []
     dup_count = count = 0
     with open(source_file, 'r') as sfin, open(output_file + '.source', 'w') as fout:
@@ -93,3 +130,30 @@ if __name__ == '__main__':
       for l in tqdm(tfin):
         for i in range(keep_size):
           fout.write(l)
+
+  elif args.task == 'eval':
+    from_file, to_file = args.input
+    output_file = args.output
+    batch_size = 128
+    num_para = 5
+
+    bart = BartParaphraser(model_path)
+    batch_source = []
+    batch_target = []
+    with open(from_file, 'r') as ffin, open(to_file, 'r') as tfin, open(output_file, 'w') as fout:
+      for l in tqdm(ffin):
+        f = l.strip().split('\t')[0]
+        for i in range(num_para):
+          t = tfin.readline().strip().split('\t')[0]
+          batch_source.append(f)
+          batch_target.append(t)
+        if len(batch_source) >= batch_size:
+          f2t = bart.eval_perp(batch_source, batch_target).detach().cpu().numpy()
+          t2f = bart.eval_perp(batch_target, batch_source).detach().cpu().numpy()
+          write_to_file_eval(f2t, t2f, fout)
+          batch_source = []
+          batch_target = []
+      if len(batch_source) > 0:
+        f2t = bart.eval_perp(batch_source, batch_target).detach().cpu().numpy()
+        t2f = bart.eval_perp(batch_target, batch_source).detach().cpu().numpy()
+        write_to_file_eval(f2t, t2f, fout)
