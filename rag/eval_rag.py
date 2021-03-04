@@ -22,6 +22,7 @@ sys.path.append(os.path.join(os.getcwd()))  # noqa: E402 # isort:skip
 from utils_rag import exact_match_score, f1_score  # noqa: E402 # isort:skip
 from rag_model import MyRagSequenceForGeneration
 from finetune_rag import GenerativeQAModule, root_to_mdr
+from dataset import Break
 
 
 logger = logging.getLogger(__name__)
@@ -343,7 +344,7 @@ def get_args():
     )
     parser.add_argument(
         "--eval_mode",
-        choices=["e2e", "retrieval", "e2ec"],
+        choices=["e2e", "retrieval", "e2ec", "break"],
         default="e2e",
         type=str,
         help="Evaluation mode, e2e calculates exact match and F1 of the downstream task, retrieval calculates precision@k.",
@@ -467,6 +468,9 @@ def main(args):
     elif args.eval_mode == 'e2ec':
         evaluate_batch_fn = evaluate_batch_e2e_with_context
         score_fn = get_scores
+    elif args.eval_mode == 'break':
+        evaluate_batch_fn = evaluate_batch_e2e_multihop_retrieval
+        score_fn = get_scores
     else:
         evaluate_batch_fn = evaluate_batch_retrieval
         score_fn = get_precision_at_k
@@ -508,31 +512,53 @@ def main(args):
 
         model.to(args.device)
 
-        with open(args.evaluation_set, "r") as eval_file, \
-          open(args.gold_data_path, 'r') as gold_file, \
-          open(args.predictions_path, "w") as preds_file, \
-          open(args.predictions_path + '.html', 'w') as vis_file:
-            questions = []
-            golds = []
-            for line in tqdm(eval_file):
-                questions.append(line.strip())
-                golds.append(gold_file.readline().rstrip('\n'))
-                if len(questions) == args.eval_batch_size:
+        if args.eval_mode == 'break':
+            split = 'dev'
+            batch_size = args.eval_batch_size
+            output_file = args.predictions_path
+            break_dataset = Break('/home/jzb/exp/Break/break_dataset/QDMR-high-level')
+
+            for nh in list(range(break_dataset.max_hop)) + [-1]:
+                id2q = break_dataset.get_hop_n(nh, split=split)
+                print('--- {} with {} questions ---'.format(nh, len(id2q)))
+                if len(id2q) <= 0:
+                    continue
+                id2a = {}
+                inds, questions = list(zip(*id2q.items()))
+                for b in range(0, len(inds), batch_size):
+                    ids = inds[b:b + batch_size]
+                    qs = questions[b:b + batch_size]
+                    answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, qs)
+                    for id, a in zip(ids, answers):
+                        id2a[id] = a
+                break_dataset.instantiate_hop_n(id2a, nh, split=split)
+                break_dataset.save(split, output_file)
+        else:
+            with open(args.evaluation_set, "r") as eval_file, \
+              open(args.gold_data_path, 'r') as gold_file, \
+              open(args.predictions_path, "w") as preds_file, \
+              open(args.predictions_path + '.html', 'w') as vis_file:
+                questions = []
+                golds = []
+                for line in tqdm(eval_file):
+                    questions.append(line.strip())
+                    golds.append(gold_file.readline().rstrip('\n'))
+                    if len(questions) == args.eval_batch_size:
+                        answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
+                        preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
+                        preds_file.flush()
+                        if args.eval_mode == 'e2e':
+                            write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
+                        questions = []
+                        golds = []
+                if len(questions) > 0:
                     answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
                     preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                     preds_file.flush()
                     if args.eval_mode == 'e2e':
                         write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
-                    questions = []
-                    golds = []
-            if len(questions) > 0:
-                answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
-                preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
-                preds_file.flush()
-                if args.eval_mode == 'e2e':
-                    write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
 
-            score_fn(args, args.predictions_path, args.gold_data_path)
+                score_fn(args, args.predictions_path, args.gold_data_path)
 
 
 if __name__ == "__main__":
