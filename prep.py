@@ -168,8 +168,12 @@ def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str
 
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
-  parser.add_argument('--task', type=str, choices=['eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace', 'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'format_sh_mh', 'dict2csv', 'format_traverse'], default='hotpotqa')
+  parser.add_argument('--task', type=str, choices=[
+    'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace',
+    'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
+    'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
+  parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str)
   parser.add_argument('--split', type=str, default='dev')
   parser.add_argument('--num_hops', type=int, default=2)
@@ -285,7 +289,8 @@ if __name__ == '__main__':
           stat = sorted(stat.items())
           print(stat)
 
-    pred_file, source_file, target_file, add_file = args.input
+    pred_file, source_file, target_file, add_file = args.input[:4]
+    score_file = args.input[4] if len(args.input) > 4 else add_file
     ems = []
     ems_first = []
     groups = []
@@ -299,20 +304,25 @@ if __name__ == '__main__':
     if 'op' in add_file:
       addtion_res = lambda x: x
 
-    with open(pred_file, 'r') as pfin, open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(add_file, 'r') as afin:
+    with open(pred_file, 'r') as pfin, \
+      open(source_file, 'r') as sfin, \
+      open(target_file, 'r') as tfin, \
+      open(add_file, 'r') as afin, \
+      open(score_file, 'r') as scorefin:
       preds = []
       sources = []
+      scores = []
       for i, l in enumerate(pfin):
         pred = l.rstrip('\n').split('\t')[0]
         source = sfin.readline().strip()
+        score = scorefin.readline().strip().split('\t')
         preds.append(pred)
         sources.append(source)
+        scores.append((float(score[0]), float(score[1])) if len(score) == 2 else (0, 0))
         if i % args.num_para == args.num_para - 1:
           pass
         else:
           continue
-        #sources = sources[:1]
-        #preds = preds[:1]
         targets = tfin.readline().rstrip('\n').split('\t')
         addition = afin.readline().rstrip('\n')
         em_li = [max(exact_match_score(pred, target) for target in targets) for pred in preds]
@@ -330,9 +340,16 @@ if __name__ == '__main__':
             cates.append('')
         groups[-1].append(em)
         if numhops2temps[args.num_hops][i % len(numhops2temps[args.num_hops])] in {'n-*', '*-n', 'n-n'}:
-          cases[-1].append((sources, targets, preds, em_li))
+          scores[0] = (0, 0)
+          rank = np.argsort([-s1 - s2 for s1, s2 in scores])
+          sources = np.array(sources)[rank]
+          preds = np.array(preds)[rank]
+          em_li = np.array(em_li)[rank]
+          scores = np.array(scores)[rank]
+          cases[-1].append((sources, targets, preds, em_li, scores))
         preds = []
         sources = []
+        scores = []
     print('em {:.2f}, only first {:.2f}'.format(np.mean(ems) * 100, np.mean(ems_first) * 100))
     temps = numhops2temps[args.num_hops]
     groups = [dict(zip(temps, group)) for group in groups]
@@ -369,8 +386,8 @@ if __name__ == '__main__':
           fout.write('<h3>random cases</h3>\n')
           for c in case[:5]:
             fout.write('<br>\n')
-            for s, t, p, e in c:
-              s = '<br>'.join([_s.split('\t')[0] for _s in s])
+            for s, t, p, e, scores in c:
+              s = '<br>'.join(['{} ({:.2f}, {:.2f})'.format(_s.split('\t')[0], score[0], score[1]) for _s, score in zip(s, scores)])
               p = '&nbsp;&nbsp;&nbsp;'.join('{} ({})'.format(_p, _e) for _p, _e in zip(p, e))
               t = '&nbsp;&nbsp;&nbsp;'.join(t)
               fout.write('<div><div>Q: {}</div>\n<div style="padding-left: 80px;">G: {}</div>\n<div style="padding-left: 80px;">P: {}</div></div>'.format(s, t, p))
@@ -379,15 +396,15 @@ if __name__ == '__main__':
             use_count = 0
             for c in case:
               use = False
-              for s, t, p, e in c:
+              for s, t, p, e, scores in c:
                 if not e[0] and np.max(e[1:]):
                   use = True
               if not use:
                 continue
               use_count += 1
               fout.write('<br>\n')
-              for s, t, p, e in c:
-                s = '<br>'.join([_s.split('\t')[0] for _s in s])
+              for s, t, p, e, scores in c:
+                s = '<br>'.join(['{} ({:.2f}, {:.2f})'.format(_s.split('\t')[0], score[0], score[1]) for _s, score in zip(s, scores)])
                 p = '&nbsp;&nbsp;&nbsp;'.join('{} ({})'.format(_p, _e) for _p, _e in zip(p, e))
                 t = '&nbsp;&nbsp;&nbsp;'.join(t)
                 fout.write('<div><div>Q: {}</div>\n<div style="padding-left: 80px;">G: {}</div>\n<div style="padding-left: 80px;">P: {}</div></div>'.format(s, t, p))
@@ -656,3 +673,54 @@ if __name__ == '__main__':
         tfout.write('{}\n'.format(e2))
         sfout.write('{}: {}, {}\n'.format(s, p1, p2))
         tfout.write('{}\n'.format(e2))
+
+  elif args.task == 'combine_para':
+    fins = [open(i, 'r') for i in args.input]
+    sfins = [open(i + '.score', 'r') for i in args.input]
+    pfins = [open(i, 'r') for i in args.prediction]
+    with open(args.output, 'w') as fout, \
+      open(args.output + '.score', 'w') as sfout, \
+      open(args.prediction[0] + '.combine', 'w') as pfout:
+      for _fins, _fout in [(fins, fout), (sfins, sfout), (pfins, pfout)]:
+        while True:
+          try:
+            for i, fin in enumerate(_fins):
+              for j in range(args.num_para):
+                l = fin.readline()
+                if l == '':
+                  raise EOFError
+                if i > 0 and j == 0:
+                  continue
+                _fout.write(l)
+          except EOFError:
+            break
+
+  elif args.task == 'break_ana':
+    consist = {}
+    inconsist = {}
+    total_count = consist_count = 0
+    op2con_incon = defaultdict(lambda: [0, 0])
+    with open(args.input[0], 'r') as fin:
+      data = json.load(fin)
+      total_count = len(data)
+      for id, entry in data.items():
+        ops = set(entry['operators'].split('-'))
+        if exact_match_score(entry['prediction'].strip(), entry['decomposition_prediction'][-1].strip()):
+          consist_count += 1
+          consist[id] = entry
+          for op in ops:
+            op2con_incon[op][0] += 1
+        else:
+          inconsist[id] = entry
+          for op in ops:
+            op2con_incon[op][1] += 1
+
+    print('{}/{}'.format(consist_count, total_count))
+    with open(args.output + '.consist', 'w') as fout:
+      json.dump(consist, fout, indent=2)
+    with open(args.output + '.inconsist', 'w') as fout:
+      json.dump(inconsist, fout, indent=2)
+    op2con_incon = [(k, (v1 / (v1 + v2) * 100, v2 / (v1 + v2) * 100)) for k, (v1, v2) in op2con_incon.items()]
+    op2con_incon = sorted(op2con_incon, key=lambda x: -x[1][0])
+    for k, (v1, v2) in op2con_incon:
+      print('{}: {:.2f}%'.format(k, v1))
