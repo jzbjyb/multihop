@@ -1,4 +1,4 @@
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Set, Tuple, Union
 from collections import defaultdict
 import argparse
 import json
@@ -11,7 +11,7 @@ from tqdm import tqdm
 import os
 import csv
 import matplotlib.pyplot as plot
-from dataset import Break, HoptopQA, WebQeustion, ComplexWebQuestion, SlingExtractor, MultihopQuestion
+from dataset import Break, HoptopQA, WebQuestion, ComplexWebQuestion, SlingExtractor, MultihopQuestion, GraphQuestion
 from rag.utils_rag import exact_match_score, f1_score
 from rag.eval_rag import get_scores
 
@@ -21,6 +21,16 @@ numhops2temps: Dict[int, List[str]] = {
   2: ['n-*', '*-n', 'n-n']
 }
 i2ph = {0: 'XXX', 1: 'YYY', 2: 'ZZZ', 3: 'AAA', 4: 'BBB', 5: 'CCC', 6: 'DDD', 7: 'EEE', 8: 'FFF', 9: 'GGG', 10: 'HHH'}
+
+
+def get_se():
+  se = SlingExtractor()
+  se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
+  se.load_filter('wikidata_property_template.json')
+  se.load_single_hop_questions('/home/zhengbaj/tir4/exp/PAQ/PAQ/PAQ.filtered.jsonl')
+  os.environ['STANFORD_HOME'] = '/home/zhengbaj/tir4/stanford'
+  se.load_stanford_nlp()
+  return se
 
 
 def nline_to_cate(nline: int, num_hops: int):
@@ -166,12 +176,38 @@ def overlap(pred1_file: str, pred2_file: str, source_file: str, target_file: str
         print('\t' + v, end='\n')
 
 
+def entity_linking_on_elq(input_file: str, output_file: str, dataset: Union[GraphQuestion, WebQuestion], se: SlingExtractor):
+  with open(input_file, 'r') as fin, open(output_file, 'w') as fout:
+    found = total = 0
+    for l in fin:
+      l = json.loads(l)
+      id = '{}-{}'.format(input_file, l['id'])
+      question = l['text']
+      question_entity = [(question[m[0]:m[1]], m[0], m[1], e) for m, e in zip(l['mentions'], l['wikidata_id'])]
+      answers = dataset[l['id']]['answers']
+      answers_entity = []
+      for ans in answers:
+        total += 1
+        answers_entity.append([])
+        ae_wikis = se.phrase.lookup(ans)  # match against the whole answer
+        if len(ae_wikis) <= 0:
+          continue
+        found += 1
+        answers_entity[-1].append((ans, 0, len(ans), ae_wikis[0].id))
+      fout.write(json.dumps({'id': id,
+                             'question': question,
+                             'question_entity': question_entity,
+                             'answers': answers,
+                             'answers_entity': answers_entity}) + '\n')
+  print('find {} among {} answer entities'.format(found, total))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
     'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace',
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
-    'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana'], default='hotpotqa')
+    'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str)
@@ -223,7 +259,7 @@ if __name__ == '__main__':
         tfout.write('{}\n'.format(mh['a']))
 
   elif args.task == 'cwq':
-    wq = WebQeustion('/home/jzb/exp/Break/break_dataset/QDMR/webqsp')
+    wq = WebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/webqsp')
     cwq = ComplexWebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/complexwebq', webq=wq)
     with open(args.output + '.id', 'w') as ifout,\
       open(args.output + '.source', 'w') as sfout, \
@@ -300,7 +336,7 @@ if __name__ == '__main__':
     addtion_res = None
     if 'cwq' in pred_file:
       addtion_res = ComplexWebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/complexwebq',
-                                       webq=WebQeustion('/home/jzb/exp/Break/break_dataset/QDMR/webqsp'))
+                                       webq=WebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/webqsp'))
     if 'op' in add_file:
       addtion_res = lambda x: x
 
@@ -592,12 +628,7 @@ if __name__ == '__main__':
 
   elif args.task == 'to_multihop':
     question_file = args.input
-    se = SlingExtractor()
-    se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
-    se.load_filter('wikidata_property_template.json')
-    se.load_single_hop_questions('/home/zhengbaj/tir4/exp/PAQ/PAQ/PAQ.filtered.jsonl')
-    os.environ['STANFORD_HOME'] = '/home/zhengbaj/tir4/stanford'
-    se.load_stanford_nlp()
+    se = get_se()
     to_multihop(question_file, args.output, se,
                 ops=['project_in', 'project_out', 'filter', 'agg', 'superlative', 'union', 'intersection'],
                 action='extend')
@@ -724,3 +755,9 @@ if __name__ == '__main__':
     op2con_incon = sorted(op2con_incon, key=lambda x: -x[1][0])
     for k, (v1, v2) in op2con_incon:
       print('{}: {:.2f}%'.format(k, v1))
+
+  elif args.task == 'el':
+    se = get_se()
+    ds = GraphQuestion('elq')
+    #ds = WebQuestion('elq')
+    entity_linking_on_elq(args.input[0], args.output, dataset=ds, se=se)

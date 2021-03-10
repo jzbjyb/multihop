@@ -5,9 +5,9 @@ from collections import defaultdict
 from .multihop_question import MultihopQuestion
 
 
-class WebQeustion(object):
+class WebQuestion(object):
   def __init__(self, root_dir: str):
-    print('loading WebQeustion ...')
+    print('loading WebQuestion ...')
     self.numparses2count = defaultdict(lambda: 0)
     for split, file in [('train', 'WebQSP/data/WebQSP.train.json'), ('test', 'WebQSP/data/WebQSP.test.json')]:
       file = os.path.join(root_dir, file)
@@ -38,8 +38,8 @@ class WebQeustion(object):
 
 
 class ComplexWebQuestion(object):
-  def __init__(self, root_dir: str, webq: WebQeustion=None):
-    print('loading ComplexWebQeustion ...')
+  def __init__(self, root_dir: str, webq: WebQuestion=None):
+    print('loading ComplexWebQuestion ...')
     self.webq = webq
     for split, file in [('train', '1_1/ComplexWebQuestions_train.json'),
                         ('dev', '1_1/ComplexWebQuestions_dev.json')]:
