@@ -207,7 +207,7 @@ if __name__ == '__main__':
   parser.add_argument('--task', type=str, choices=[
     'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace',
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
-    'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el'], default='hotpotqa')
+    'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str)
@@ -761,3 +761,7 @@ if __name__ == '__main__':
     ds = GraphQuestion('elq')
     #ds = WebQuestion('elq')
     entity_linking_on_elq(args.input[0], args.output, dataset=ds, se=se)
+
+  elif args.task == 'load':
+    from transformers import RagRetriever
+    retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
