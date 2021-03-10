@@ -56,7 +56,8 @@ class BartParaphraser(Paraphraser):
     target_mask = target_mask.cuda()
     bs, seq_len = target.size()
 
-    logits = self.model.model(source, source_len, prev_output_tokens=target)[0]
+    output = self.model.model(source, source_len, prev_output_tokens=target)
+    logits = output[0].detach()
     lp = F.log_softmax(logits, dim=-1)
     lp = lp[:, :-1].contiguous()  # remove the last position
     target_shift = target[:, 1:].contiguous()  # remove the first token (bos)
@@ -97,63 +98,77 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=['para', 'eval'], default='para')
   parser.add_argument('--input', type=str, nargs='+')
-  parser.add_argument('--output', type=str)
+  parser.add_argument('--output', type=str, nargs='+')
+  parser.add_argument('--batch_size', type=int, default=128)
+  parser.add_argument('--max_num_tokens', type=int, default=0)
   args = parser.parse_args()
 
-  model_path = '/home/jzb/exp/knowlm/rag/models/paraphrase/checkpoint_best.pt'
+  model_path = 'rag/models/paraphrase/checkpoint_best.pt'
 
   if args.task == 'para':
     source_file, target_file = args.input
-    output_file = args.output
-    batch_size = 128
+    output_source_file, output_target_file = args.output
+    batch_size = args.batch_size
+    mnt = args.max_num_tokens
     beam_size = 10
     keep_size = 5
 
     bart = BartParaphraser(model_path)
     batch = []
+    num_token = 0
     dup_count = count = 0
-    with open(source_file, 'r') as sfin, open(output_file + '.source', 'w') as fout:
+    with open(source_file, 'r') as sfin, open(output_source_file, 'w') as fout:
       for l in tqdm(sfin):
         count += 1
-        batch.append(l.strip().split('\t')[0])
-        if len(batch) >= batch_size:
+        l = l.strip().split('\t')[0]
+        batch.append(l)
+        num_token += len(l.split(' '))
+        if (mnt and num_token >= mnt) or len(batch) >= batch_size:
           paras_li = bart.generate(batch, beam_size=beam_size)
           dup_count += write_to_file(batch, paras_li, fout, keep_size=keep_size, dedup=True)
           batch = []
+          num_token = 0
       if len(batch) > 0:
         paras_li = bart.generate(batch, beam_size=beam_size)
         dup_count += write_to_file(batch, paras_li, fout, keep_size=keep_size, dedup=True)
         batch = []
+        num_token = 0
     print('total {}, dup {}'.format(count, dup_count))
 
-    with open(target_file, 'r') as tfin, open(output_file + '.target', 'w') as fout:
+    with open(target_file, 'r') as tfin, open(output_target_file, 'w') as fout:
       for l in tqdm(tfin):
         for i in range(keep_size):
           fout.write(l)
 
   elif args.task == 'eval':
     from_file, to_file = args.input
-    output_file = args.output
-    batch_size = 128
+    output_file = args.output[0]
+    batch_size = args.batch_size
+    mnt = args.max_num_tokens
     num_para = 5
 
     bart = BartParaphraser(model_path)
     batch_source = []
     batch_target = []
+    num_token = 0
     with open(from_file, 'r') as ffin, open(to_file, 'r') as tfin, open(output_file, 'w') as fout:
       for l in tqdm(ffin):
         f = l.strip().split('\t')[0]
+        nt = len(f.split(' '))
         for i in range(num_para):
           t = tfin.readline().strip().split('\t')[0]
           batch_source.append(f)
           batch_target.append(t)
-        if len(batch_source) >= batch_size:
-          f2t = bart.eval_perp(batch_source, batch_target).detach().cpu().numpy()
-          t2f = bart.eval_perp(batch_target, batch_source).detach().cpu().numpy()
-          write_to_file_eval(f2t, t2f, fout)
-          batch_source = []
-          batch_target = []
+          num_token += nt
+          if (mnt and num_token >= mnt) or len(batch_source) >= batch_size:
+            print(num_token)
+            f2t = bart.eval_perp(batch_source, batch_target).cpu().numpy()
+            t2f = bart.eval_perp(batch_target, batch_source).cpu().numpy()
+            write_to_file_eval(f2t, t2f, fout)
+            batch_source = []
+            batch_target = []
+            num_token = 0
       if len(batch_source) > 0:
-        f2t = bart.eval_perp(batch_source, batch_target).detach().cpu().numpy()
-        t2f = bart.eval_perp(batch_target, batch_source).detach().cpu().numpy()
+        f2t = bart.eval_perp(batch_source, batch_target).cpu().numpy()
+        t2f = bart.eval_perp(batch_target, batch_source).cpu().numpy()
         write_to_file_eval(f2t, t2f, fout)

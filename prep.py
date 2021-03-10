@@ -207,7 +207,7 @@ if __name__ == '__main__':
   parser.add_argument('--task', type=str, choices=[
     'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace',
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
-    'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load'], default='hotpotqa')
+    'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load', 'combine_tomultihop'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str)
@@ -765,3 +765,32 @@ if __name__ == '__main__':
   elif args.task == 'load':
     from transformers import RagRetriever
     retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
+
+  elif args.task == 'combine_tomultihop':
+    sample_count = 500
+    op2mhqs = defaultdict(list)
+    with open(args.output + '.source', 'w') as sfout, \
+      open(args.output + '.target', 'w') as tfout, \
+      open(args.output + '.op', 'w') as ofout:
+      for dir in args.input:
+        for root, dirs, files in os.walk(dir):
+          for file in files:
+            if not 'tomultihop' in file or not file.endswith('.jsonl'):
+              continue
+            with open(os.path.join(root, file), 'r') as fin:
+              for l in fin:
+                mhq = MultihopQuestion.fromstr(l)
+                op = mhq.kwargs['op']
+                op2mhqs[op].append(mhq)
+      print(sorted([(k, len(v)) for k, v in op2mhqs.items()], key=lambda x: -x[1]))
+      for op, mhqs in op2mhqs.items():
+        mhqs = np.random.choice(mhqs, min(len(mhqs), sample_count), replace=False)
+        for mhq in mhqs:
+          for sh in mhq.single_hops:
+            sfout.write(sh['q'] + '\n')
+            tfout.write('\t'.join(sh['a']) + '\n')
+            ofout.write(op + '\n')
+          mh = mhq.multi_hop
+          sfout.write(mh['q'] + '\n')
+          tfout.write('\t'.join(mh['a']) + '\n')
+          ofout.write(op + '\n')
