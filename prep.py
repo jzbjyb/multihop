@@ -202,12 +202,49 @@ def entity_linking_on_elq(input_file: str, output_file: str, dataset: Union[Grap
   print('find {} among {} answer entities'.format(found, total))
 
 
+def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, output_file: str, num_gold: int=1):
+  pos2gold: Dict[int, int] = defaultdict(lambda: 0)
+  hasgold2count: Dict[int, int] = defaultdict(lambda: 0)
+  fould_gold = total = 0
+  with open(source_file, 'r') as sfin, \
+    open(target_file, 'r') as tfin, \
+    open(ret_file, 'r') as rfin, \
+    open(output_file, 'w') as fout, \
+    open(output_file + '.id', 'w') as ifout:
+    for id, l in enumerate(sfin):
+      question = l.strip().split('\t')[0]
+      answers = tfin.readline().strip().split('\t')
+      docs = rfin.readline().strip().split('\t')[:-1]
+      docs = [doc.split(' || ') for doc in docs]
+      has_gold = 0
+      for i, doc in enumerate(docs):
+        for answer in answers:
+          if answer.lower() in (doc[1] + ' ' + doc[2]).lower():
+            pos2gold[i] += 1
+            has_gold += 1
+            if has_gold <= num_gold:
+              fout.write('{}\t{}\t{}\n'.format(question, doc[1], doc[2]))
+              ifout.write('{}\n'.format(id))
+            break
+      fould_gold += int(has_gold > 0)
+      hasgold2count[has_gold] += 1
+      total += 1
+  print('found {} among {} that have gold'.format(fould_gold, total))
+  print('position -> portion with gold')
+  for k, v in sorted(pos2gold.items(), key=lambda x: x[0]):
+    print('{}\t{:.3f}'.format(k, v / total))
+  print('#gold -> portion')
+  for k, v in sorted(hasgold2count.items(), key=lambda x: x[0]):
+    print('{}\t{:.3f}'.format(k, v / total))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
     'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace',
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
-    'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load', 'combine_tomultihop'], default='hotpotqa')
+    'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
+    'combine_tomultihop', 'gold_ret'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str)
@@ -794,3 +831,9 @@ if __name__ == '__main__':
           sfout.write(mh['q'] + '\n')
           tfout.write('\t'.join(mh['a']) + '\n')
           ofout.write(op + '\n')
+
+  elif args.task == 'gold_ret':
+    source_file, target_file, ret_file = args.input
+    output_file = args.output
+    num_gold = 5
+    find_gold_retrieval(source_file, target_file, ret_file, output_file, num_gold=num_gold)

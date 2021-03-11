@@ -1,6 +1,6 @@
 """ Evaluation script for RAG models."""
 
-from typing import List
+from typing import List, Callable
 
 import argparse
 import ast
@@ -128,6 +128,28 @@ def evaluate_batch_retrieval(args, rag_model, questions):
         provenance = [strip_title(title) for title in docs["title"]]
         provenance_strings.append("\t".join(provenance))
     return provenance_strings
+
+
+def evaluate_batch_retrieval_all(args, rag_model, questions):
+    n_docs = args.n_docs
+    with torch.no_grad():
+        inputs_dict = rag_model.retriever.question_encoder_tokenizer.batch_encode_plus(
+            questions, return_tensors='pt', padding=True, truncation=True, max_length=args.max_source_length)
+        input_ids = inputs_dict['input_ids'].to(args.device)
+        attention_mask = inputs_dict['attention_mask'].to(args.device)
+        question_hidden_states = rag_model.question_encoder(input_ids, attention_mask=attention_mask)[0]
+        doc_ids = rag_model.retriever(
+            input_ids,
+            question_hidden_states.cpu().detach().to(torch.float32).numpy(),
+            prefix=rag_model.generator.config.prefix,
+            n_docs=n_docs,
+            return_tensors='pt',
+        ).doc_ids
+        all_docs = rag_model.retriever.index.get_doc_dicts(doc_ids)
+        doc_ids = doc_ids.cpu().numpy()
+        all_docs = ['\t'.join(map(lambda x: '{} || {} || {}'.format(x[0], x[1], x[2]), zip(doc_ids[i], docs['title'], docs['text']))) for i, docs in enumerate(all_docs)]
+        scores = [0] * len(all_docs)
+        return all_docs, scores, None, None
 
 
 def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
@@ -280,6 +302,7 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
     def format_qtd(qtd):
         if len(qtd) == 3:
             q, ct, cd = qtd
+            ct = ct.strip('"')
             return (ct + rag_model.config.title_sep + cd + rag_model.config.doc_sep + q).replace("  ", " ")
         if len(qtd) == 1:
             return qtd[0].replace("  ", " ")
@@ -348,7 +371,7 @@ def get_args():
     )
     parser.add_argument(
         "--eval_mode",
-        choices=["e2e", "retrieval", "e2ec", "break"],
+        choices=["e2e", "retrieval", "e2ec", "break", "retrieval_all"],
         default="e2e",
         type=str,
         help="Evaluation mode, e2e calculates exact match and F1 of the downstream task, retrieval calculates precision@k.",
@@ -450,6 +473,49 @@ def write_html(questions: List[str], answers: List[str], golds: List[str],
         vis_file.write('<hr>')
 
 
+class Args(object):
+    def __init__(self, source, target, prediction, bs):
+        self.evaluation_set = source
+        self.gold_data_path = target
+        self.predictions_path = prediction
+        self.eval_batch_size = bs
+        self.eval_mode = 'retrieval_all'
+        self.device = torch.device("cuda")
+        self.num_beams = 5
+        self.min_length = 1
+        self.max_length = 50
+        self.n_docs = 100
+        self.max_source_length = 128
+        self.print_predictions = False
+
+
+def run_on_dataset(model, args, evaluate_batch_fn: Callable, score_fn: Callable):
+    with open(args.evaluation_set, "r") as eval_file, \
+      open(args.gold_data_path, 'r') as gold_file, \
+      open(args.predictions_path, "w") as preds_file, \
+      open(args.predictions_path + '.html', 'w') as vis_file:
+        questions = []
+        golds = []
+        for line in tqdm(eval_file):
+            questions.append(line.strip())
+            golds.append(gold_file.readline().rstrip('\n'))
+            if len(questions) == args.eval_batch_size:
+                answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
+                preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
+                preds_file.flush()
+                if args.eval_mode == 'e2e':
+                    write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
+                questions = []
+                golds = []
+        if len(questions) > 0:
+            answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
+            preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
+            preds_file.flush()
+            if args.eval_mode == 'e2e':
+                write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
+        score_fn(args, args.predictions_path, args.gold_data_path)
+
+
 def main(args):
     model_kwargs = {}
     if args.model_type is None:
@@ -481,6 +547,9 @@ def main(args):
         score_fn = get_scores
     elif args.eval_mode == 'break':
         evaluate_batch_fn = evaluate_batch_e2e_multihop_retrieval
+        score_fn = get_scores
+    elif args.eval_mode == 'retrieval_all':
+        evaluate_batch_fn = evaluate_batch_retrieval_all
         score_fn = get_scores
     else:
         evaluate_batch_fn = evaluate_batch_retrieval

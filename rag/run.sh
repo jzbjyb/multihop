@@ -18,6 +18,8 @@ elif [[ ${mode} == 'break' ]]; then
     ndocs=5
 elif [[ ${mode} == 'e2ec' ]]; then
     ndocs=1
+elif [[ ${mode} == 'retrieval_all' ]]; then
+    ndocs=100
 fi
 
 if [[ ${server} == 'tir' ]]; then
