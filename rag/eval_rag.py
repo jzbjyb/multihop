@@ -109,6 +109,7 @@ def evaluate_batch_retrieval(args, rag_model, questions):
         return_tensors="pt",
         padding=True,
         truncation=True,
+        max_length=args.max_source_length,
     )["input_ids"].to(args.device)
 
     question_enc_outputs = rag_model.rag.question_encoder(retriever_input_ids)
@@ -137,7 +138,7 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
     questions = [q.split('\t')[0] for q in questions]
     with torch.no_grad():
         inputs_dict = rag_model.retriever.question_encoder_tokenizer.batch_encode_plus(
-            questions, return_tensors='pt', padding=True, truncation=True)
+            questions, return_tensors='pt', padding=True, truncation=True, max_length=args.max_source_length)
         input_ids = inputs_dict['input_ids'].to(args.device)
         attention_mask = inputs_dict['attention_mask'].to(args.device)
         prev_doc_scores = None
@@ -199,7 +200,8 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
             retrieved_doc_ids.append([doc_ids[i * n_docs:i * n_docs + n_docs].cpu().numpy().tolist() for i in range(len(strings) // n_docs)])
 
             if nh != args.retrieval_hop - 1:
-                input_ids, attention_mask = GenerativeQAModule.convert_to_decoder_ids(context_input_ids, context_attention_mask, rag_model, 128, use_mdr=args.use_mdr)  # TODO: add param
+                input_ids, attention_mask = GenerativeQAModule.convert_to_decoder_ids(
+                    context_input_ids, context_attention_mask, rag_model, max_source_length=args.max_source_length, use_mdr=args.use_mdr)
 
         # generate
         hypos = []
@@ -213,7 +215,9 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
                 generator_input_ids,
                 attention_mask=None,
                 num_beams=num_beams,
-                num_return_sequences=num_doc_return_sequences
+                num_return_sequences=num_doc_return_sequences,
+                min_length=args.min_length,
+                max_length=args.max_length,
             )  # n_docs * n_beam, tgt_len
             if do_deduplication:
                 # do_deduplication, max_output_len
@@ -247,7 +251,7 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
 def evaluate_batch_e2e(args, rag_model, questions):
     with torch.no_grad():
         inputs_dict = rag_model.retriever.question_encoder_tokenizer.batch_encode_plus(
-            questions, return_tensors="pt", padding=True, truncation=True
+            questions, return_tensors="pt", padding=True, truncation=True, max_length=args.max_source_length
         )
 
         input_ids = inputs_dict.input_ids.to(args.device)
@@ -410,6 +414,13 @@ def get_args():
     )
     parser.add_argument("--min_length", default=1, type=int, help="Min length of the generated answers")
     parser.add_argument("--max_length", default=50, type=int, help="Max length of the generated answers")
+    parser.add_argument(
+        "--max_source_length",
+        default=128,
+        type=int,
+        help="The maximum total input sequence length after tokenization. Sequences longer "
+             "than this will be truncated, sequences shorter will be padded.",
+    )
 
     parser.add_argument(
         "--print_predictions",
