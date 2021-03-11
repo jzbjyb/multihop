@@ -238,13 +238,76 @@ def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, outpu
     print('{}\t{:.3f}'.format(k, v / total))
 
 
+def gold_retrieval_compare(source_file: str, target_file: str, pred_file: str,
+                           ret_pred_file: str, ret_file_id: str,
+                           gold_pred_file: str=None,
+                           use_first_ret: bool=False, num_hop: int=2):
+  id2preds: Dict[int, List[str]] = defaultdict(list)
+  with open(ret_file_id, 'r') as rfin, open(ret_pred_file, 'r') as rpfin:
+    for l in rfin:
+      id = int(l.strip())
+      pred = rpfin.readline().rstrip('\n').split('\t')[0]
+      id2preds[id].append(pred)
+
+  is_multi_li = []
+  raw_em_li = []
+  new_em_li = []
+  with open(source_file, 'r') as sfin, \
+    open(target_file, 'r') as tfin, \
+    open(pred_file, 'r') as pfin:
+    for i, l in enumerate(sfin):
+      is_multi = (i + 1) % (num_hop + 1) == 0
+      question = l.strip().split('\t')[0]
+      targets = tfin.readline().strip().split('\t')
+      pred = pfin.readline().rstrip('\n').split('\t')[0]
+      ret_preds = id2preds[i]
+      if len(ret_preds) <= 0:
+        continue
+      raw_em = max(exact_match_score(pred, target) for target in targets)
+      new_ems = [max(exact_match_score(ret_pred, target) for target in targets) for ret_pred in ret_preds]
+      new_em = new_ems[0] if use_first_ret else max(new_ems)
+      raw_em_li.append(raw_em)
+      new_em_li.append(new_em)
+      is_multi_li.append(is_multi)
+
+  # only work for num_hop = 2
+  gold_em_li = []
+  if gold_pred_file is not None:
+    with open(gold_pred_file, 'r') as fin, open(target_file, 'r') as tfin:
+      for _i, l in enumerate(fin):
+        i = _i // 8
+        ni = _i % 8
+        i = i * 3 + ni // 2
+        if ni not in {0, 2, 4}:
+          continue
+        targets = tfin.readline().strip().split('\t')
+        if len(id2preds[i]) <= 0:
+          continue
+        pred = l.rstrip('\n').split('\t')[0]
+        gold_em_li.append(max(exact_match_score(pred, target) for target in targets))
+  if len(gold_em_li) <= 0:
+    gold_em_li = [0] * len(new_em_li)
+
+  assert len(gold_em_li) == len(new_em_li)
+  raw_em_li = np.array(raw_em_li)
+  new_em_li = np.array(new_em_li)
+  gold_em_li = np.array(gold_em_li)
+  is_multi_li = np.array(is_multi_li)
+  print('ret {:.2f} pseudo gold {:.2f} gold {:.2f}'.format(
+    np.mean(raw_em_li) * 100, np.mean(new_em_li) * 100, np.mean(gold_em_li) * 100))
+  print('[MULTI] ret {:.2f} pseudo gold {:.2f} gold {:.2f}'.format(
+    np.mean(raw_em_li[is_multi_li]) * 100, np.mean(new_em_li[is_multi_li]) * 100, np.mean(gold_em_li[is_multi_li]) * 100))
+  print('[SINGLE] ret {:.2f} pseudo gold {:.2f} gold {:.2f}'.format(
+    np.mean(raw_em_li[~is_multi_li]) * 100, np.mean(new_em_li[~is_multi_li]) * 100, np.mean(gold_em_li[~is_multi_li]) * 100))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
     'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace',
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
-    'combine_tomultihop', 'gold_ret'], default='hotpotqa')
+    'combine_tomultihop', 'gold_ret', 'gold_ret_compare'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str)
@@ -296,8 +359,8 @@ if __name__ == '__main__':
         tfout.write('{}\n'.format(mh['a']))
 
   elif args.task == 'cwq':
-    wq = WebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/webqsp')
-    cwq = ComplexWebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/complexwebq', webq=wq)
+    wq = WebQuestion('../Break/break_dataset/QDMR/webqsp')
+    cwq = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq', webq=wq)
     with open(args.output + '.id', 'w') as ifout,\
       open(args.output + '.source', 'w') as sfout, \
       open(args.output + '.single.target', 'w') as stfout, \
@@ -372,8 +435,8 @@ if __name__ == '__main__':
 
     addtion_res = None
     if 'cwq' in pred_file:
-      addtion_res = ComplexWebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/complexwebq',
-                                       webq=WebQuestion('/home/jzb/exp/Break/break_dataset/QDMR/webqsp'))
+      addtion_res = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq',
+                                       webq=WebQuestion('../Break/break_dataset/QDMR/webqsp'))
     if 'op' in add_file:
       addtion_res = lambda x: x
 
@@ -436,6 +499,8 @@ if __name__ == '__main__':
       key = '{:d}{:d}-{:d}'.format(group['n-*'], group['*-n'], group['n-n'])
       non_cate[cate][key] += 1
       non_cate_case[cate][key].append(case)
+      non_cate['*'][key] += 1
+      non_cate_case['*'][key].append(case)
 
       if 'p-*' in group:
         para_cate[cate]['{:d}{:d}-{:d}'.format(group['p-*'], group['*-p'], group['p-p'])] += 1
@@ -837,3 +902,13 @@ if __name__ == '__main__':
     output_file = args.output
     num_gold = 5
     find_gold_retrieval(source_file, target_file, ret_file, output_file, num_gold=num_gold)
+
+  elif args.task == 'gold_ret_compare':
+    source_file, target_file, pred_file, ret_pred_file, ret_file_id = args.input[:5]
+    gold_pred_file = args.input[5] if len(args.input) > 5 else None
+    print('first ret')
+    gold_retrieval_compare(source_file, target_file, pred_file, ret_pred_file, ret_file_id,
+                           gold_pred_file=gold_pred_file, use_first_ret=True)
+    print('all ret')
+    gold_retrieval_compare(source_file, target_file, pred_file, ret_pred_file, ret_file_id,
+                           gold_pred_file=gold_pred_file, use_first_ret=False)

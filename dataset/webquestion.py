@@ -120,4 +120,4 @@ class ComplexWebQuestion(object):
     for split in ['train', 'dev']:
       if item in getattr(self, split):
         return getattr(self, split)[item]
-    raise KeyError
+    raise KeyError(item)
