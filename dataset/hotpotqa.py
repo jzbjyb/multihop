@@ -52,3 +52,10 @@ class HoptopQA(object):
       }
     else:
       raise NotImplementedError
+
+
+  def __getitem__(self, item: str):
+    for split in ['train', 'dev']:
+      if item in getattr(self, split):
+        return getattr(self, split)[item]
+    raise KeyError(item)

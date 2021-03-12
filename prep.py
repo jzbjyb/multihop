@@ -322,7 +322,7 @@ if __name__ == '__main__':
     get_scores(None, preds_path=args.input[0], gold_data_path=args.input[1], question_data_path=args.input[2])
 
   elif args.task == 'convert_hotpotqa':
-    hotpotqa = HoptopQA('/home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa')
+    hotpotqa = HoptopQA('../Break/break_dataset/QDMR-high-level/hotpotqa')
     with open(args.output + '.id', 'w') as fout, open(args.output + '.source', 'w') as sfout, open(args.output + '.target', 'w') as tfout:
       for id, item in getattr(hotpotqa, args.split).items():
         fout.write('{}\n'.format(id))
@@ -330,9 +330,9 @@ if __name__ == '__main__':
         tfout.write('{}\n'.format(item['answer']))
 
   elif args.task == 'hotpotqa':
-    break_dataset = Break('/home/jzb/exp/Break/break_dataset/QDMR-high-level')
+    break_dataset = Break('../Break/break_dataset/QDMR-high-level')
     print(sorted(break_dataset.ops2count['hotpot'].items(), key=lambda x: -x[1]))
-    hotpotqa = HoptopQA('/home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa')
+    hotpotqa = HoptopQA('../Break/break_dataset/QDMR-high-level/hotpotqa')
 
     with open(args.output, 'w') as fout, open(args.output + '.source', 'w') as sfout, open(args.output + '.target', 'w') as tfout:
       for de in break_dataset.get_hotpotqa(hotpotqa, split=args.split):
@@ -829,34 +829,83 @@ if __name__ == '__main__':
             break
 
   elif args.task == 'break_ana':
+    hotpotqa = HoptopQA('../Break/break_dataset/QDMR-high-level/hotpotqa')
+    cwq = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq', webq=None)
+    break_dataset = Break('../Break/break_dataset/QDMR-high-level')
+    break_dataset.add_answers(cwq=cwq, hotpotqa=hotpotqa)
     consist = {}
     inconsist = {}
     total_count = consist_count = 0
     op2con_incon = defaultdict(lambda: [0, 0])
+    op2cor_incor = defaultdict(lambda: {'00': 0, '01': 0, '10': 0, '11': 0})
+    hop2con_incon = defaultdict(lambda: [0, 0])
+    hop2cor_incor = defaultdict(lambda: {'00': 0, '01': 0, '10': 0, '11': 0})
+    hop2count = defaultdict(lambda: 0)
+    op2count = defaultdict(lambda: 0)
     with open(args.input[0], 'r') as fin:
       data = json.load(fin)
-      total_count = len(data)
       for id, entry in data.items():
+        if break_dataset.parse_id(id)[0] not in {'CWQ', 'HOTPOT'}:
+          continue
+        total_count += 1
         ops = set(entry['operators'].split('-'))
-        if exact_match_score(entry['prediction'].strip(), entry['decomposition_prediction'][-1].strip()):
+        targets = break_dataset[id]['answers']
+        multi_pred = entry['prediction'].strip()
+        single_pred = entry['decomposition_prediction'][-1].strip()
+        nh = len(entry['operators'].split('-'))
+        hop2count[nh] += 1
+        for op in ops:
+          op2count[op] += 1
+        if exact_match_score(multi_pred, single_pred):
           consist_count += 1
           consist[id] = entry
           for op in ops:
             op2con_incon[op][0] += 1
+            hop2con_incon[nh][0] += 1
         else:
           inconsist[id] = entry
           for op in ops:
             op2con_incon[op][1] += 1
+            hop2con_incon[nh][1] += 1
+        multi_correct = int(max([exact_match_score(multi_pred, target) for target in targets]))
+        single_correct = int(max([exact_match_score(single_pred, target) for target in targets]))
+        op2cor_incor['*']['{}{}'.format(single_correct, multi_correct)] += 1
+        hop2cor_incor[nh]['{}{}'.format(single_correct, multi_correct)] += 1
+        for op in ops:
+          op2cor_incor[op]['{}{}'.format(single_correct, multi_correct)] += 1
 
     print('{}/{}'.format(consist_count, total_count))
     with open(args.output + '.consist', 'w') as fout:
       json.dump(consist, fout, indent=2)
     with open(args.output + '.inconsist', 'w') as fout:
       json.dump(inconsist, fout, indent=2)
+
     op2con_incon = [(k, (v1 / (v1 + v2) * 100, v2 / (v1 + v2) * 100)) for k, (v1, v2) in op2con_incon.items()]
     op2con_incon = sorted(op2con_incon, key=lambda x: -x[1][0])
     for k, (v1, v2) in op2con_incon:
       print('{}: {:.2f}%'.format(k, v1))
+
+    hop2con_incon = [(k, (v1 / (v1 + v2) * 100, v2 / (v1 + v2) * 100)) for k, (v1, v2) in hop2con_incon.items()]
+    hop2con_incon = sorted(hop2con_incon, key=lambda x: x[0])
+    for k, (v1, v2) in hop2con_incon:
+      print('{}: {:.2f}%'.format(k, v1))
+
+    for k, v in op2cor_incor.items():
+      t = sum(v.values())
+      new_v = {_k: '{:.2f}%'.format(_v / t * 100) for _k, _v in v.items()}
+      print(k, '\t'.join([x[1] for x in sorted(new_v.items())]), sep='\t')
+
+    for k in sorted(hop2cor_incor.keys()):
+      v = hop2cor_incor[k]
+      t = sum(v.values())
+      new_v = {_k: '{:.2f}%'.format(_v / t * 100) for _k, _v in v.items()}
+      print(k, '\t'.join([x[1] for x in sorted(new_v.items())]), sep='\t')
+
+    print(sorted(hop2count.items(), key=lambda x: -x[1]))
+    op2count = list(sorted(op2count.items(), key=lambda x: -x[1]))
+    print('\t'.join([x[0] for x in op2count]))
+    print('\t'.join(['{:.2f}'.format(x[1] / total_count * 100) for x in op2count]))
+
 
   elif args.task == 'el':
     se = get_se()

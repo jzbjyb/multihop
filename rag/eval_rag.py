@@ -596,7 +596,7 @@ def main(args):
             split = 'dev'
             batch_size = args.eval_batch_size
             output_file = args.predictions_path
-            break_dataset = Break('/home/jzb/exp/Break/break_dataset/QDMR-high-level')
+            break_dataset = Break('../../Break/break_dataset/QDMR-high-level')
 
             for nh in list(range(break_dataset.max_hop)) + [-1]:
                 id2q = break_dataset.get_hop_n(nh, split=split)

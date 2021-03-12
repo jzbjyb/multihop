@@ -5,6 +5,7 @@ import json
 import random
 from collections import defaultdict
 from .hotpotqa import HoptopQA
+from .webquestion import ComplexWebQuestion
 
 
 class Break(object):
@@ -42,6 +43,20 @@ class Break(object):
         data[id] = entry
         self.max_hop = max(self.max_hop, len(decomp))
     return data
+
+
+  def add_answers(self, cwq: ComplexWebQuestion=None, hotpotqa: HoptopQA=None):
+    count = 0
+    for split in [self.train, self.dev]:
+      for id in split:
+        _origin, _split, _id = self.parse_id(id)
+        if cwq is not None and _origin == 'CWQ':
+          count += 1
+          split[id]['answers'] = cwq[_id]['answers']
+        if hotpotqa is not None and _origin == 'HOTPOT':
+          count += 1
+          split[id]['answers'] = hotpotqa[_id]['answer']
+    print('add answers for {} questions'.format(count))
 
 
   def parse_id(self, id):
@@ -109,3 +124,10 @@ class Break(object):
       if de is None:
         continue
       yield de
+
+
+  def __getitem__(self, item: str):
+    for split in ['train', 'dev']:
+      if item in getattr(self, split):
+        return getattr(self, split)[item]
+    raise KeyError(item)
