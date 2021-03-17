@@ -1,6 +1,7 @@
 from typing import Dict, Any, Tuple
 import os
 import json
+from .multihop_question import MultihopQuestion
 
 
 class HoptopQA(object):
@@ -27,7 +28,7 @@ class HoptopQA(object):
     return data
 
 
-  def decompose(self, id: str, split: str, break_entry: Dict[str, Any]) -> Dict:
+  def decompose(self, id: str, split: str, break_entry: Dict[str, Any]) -> MultihopQuestion:
     type = break_entry['operators']
     if type == 'select-project':
       if break_entry['decomposition'][1].startswith('return the name of'):
@@ -46,10 +47,9 @@ class HoptopQA(object):
       first_q, first_c, first_ans = first, (first_entity, entry['context'][first_entity][first_ind]), second_entity
       second_q, second_c, second_ans = second.replace('#1', second_entity), (second_entity, entry['context'][second_entity][second_ind]), entry['answer']
       mh_q, mh_c, mh_ans = break_entry['question_text'], [first_c, second_c], answer
-      return {
-        'single-hop': [{'q': first_q, 'c': first_c, 'a': first_ans}, {'q': second_q, 'c': second_c, 'a': second_ans}],
-        'multi-hop': {'q': mh_q, 'c': mh_c, 'a': mh_ans}
-      }
+      return MultihopQuestion(
+        single_hops=[{'q': first_q, 'c': first_c, 'a': first_ans}, {'q': second_q, 'c': second_c, 'a': second_ans}],
+        multi_hop={'q': mh_q, 'c': mh_c, 'a': mh_ans})
     else:
       raise NotImplementedError
 

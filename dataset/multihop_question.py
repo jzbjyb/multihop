@@ -1,4 +1,4 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 import json
 import truecase
 
@@ -11,7 +11,9 @@ class MultihopQuestion(object):
     self.kwargs = kwargs
     for sh in self.single_hops:
       sh['q'] = self.format_question(sh['q'])
+      sh['a'] = self.format_answer(sh['a'])
     self.multi_hop['q'] = self.format_question(self.multi_hop['q'])
+    self.multi_hop['a'] = self.format_answer(self.multi_hop['a'])
 
 
   def format_question(self, question: str):
@@ -19,6 +21,24 @@ class MultihopQuestion(object):
       question = question.strip().rstrip('?') + '?'
     question = truecase.get_true_case(question)
     return question
+
+
+  def format_answer(self, answer: Union[str, List[List[str]]]):
+    if type(answer) is str:
+      return answer.strip()
+    else:
+      return [[a.strip() for a in anss] for anss in answer]
+
+
+  @staticmethod
+  def format_multi_answers_with_alias(answers: List[List[str]],
+                                      only_first_alias: bool=False,
+                                      ans_sep: str='\t\t',
+                                      alias_sep: str='\t'):
+    if only_first_alias:
+      return ans_sep.join(anss[0] for anss in answers)
+    else:
+      return ans_sep.join(alias_sep.join(anss) for anss in answers)
 
 
   def __str__(self):

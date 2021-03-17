@@ -1,11 +1,13 @@
 from typing import Dict, Any
 import os
 import json
+from collections import defaultdict
 
 
 class GraphQuestion(object):
   def __init__(self, root_dir: str):
     print('loading GraphQuestion ...')
+    self.numans2count = defaultdict(lambda: 0)
     for split, file in [('train', 'GraphQuestions/freebase13/graphquestions.training.json'),
                         ('test', 'GraphQuestions/freebase13/graphquestions.testing.json')]:
       file = os.path.join(root_dir, file)
@@ -25,6 +27,7 @@ class GraphQuestion(object):
           'question': ex['question'],
           'answers': ex['answer']
         }
+        self.numans2count[len(ex['answer'])] += 1
       return result
 
 

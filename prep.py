@@ -337,14 +337,14 @@ if __name__ == '__main__':
     with open(args.output, 'w') as fout, open(args.output + '.source', 'w') as sfout, open(args.output + '.target', 'w') as tfout:
       for de in break_dataset.get_hotpotqa(hotpotqa, split=args.split):
         fout.write(json.dumps(de) + '\n')
-        for sh in de['single-hop']:
+        for sh in de.single_hops:
           if not args.no_context:  # use retrieval
             sfout.write('{}\t{}\t{}\n'.format(sh['q'], sh['c'][0], sh['c'][1]))
             tfout.write('{}\n'.format(sh['a']))
           # no retrieval
           sfout.write('{}\n'.format(sh['q']))
           tfout.write('{}\n'.format(sh['a']))
-        mh = de['multi-hop']
+        mh = de.multi_hop
         if not args.no_context:
           # use all retrieval
           sfout.write('{}\t{}\t{}\n'.format(mh['q'], ' '.join([c[0] for c in mh['c']]), ' '.join([c[1] for c in mh['c']])))
@@ -369,13 +369,13 @@ if __name__ == '__main__':
         for sh in de.single_hops:
           ifout.write(de.ind + '\n')
           sfout.write('{}\n'.format(sh['q']))
-          stfout.write('{}\n'.format(sh['a'][0]))
-          mtfout.write('{}\n'.format('\t'.join(sh['a'])))
+          stfout.write('{}\n'.format(sh['a'][0][0]))
+          mtfout.write('{}\n'.format(MultihopQuestion.format_multi_answers_with_alias(sh['a'])))
         mh = de.multi_hop
         ifout.write(de.ind + '\n')
         sfout.write('{}\n'.format(mh['q']))
-        stfout.write('{}\n'.format(mh['a'][0]))
-        mtfout.write('{}\n'.format('\t'.join(mh['a'])))
+        stfout.write('{}\n'.format(mh['a'][0][0]))
+        mtfout.write('{}\n'.format(MultihopQuestion.format_multi_answers_with_alias(mh['a'])))
 
   elif args.task == 'comqa':
     def parse_answer(answer, id):

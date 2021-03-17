@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 import os
 import json
 from collections import defaultdict
@@ -22,10 +22,11 @@ class WebQuestion(object):
       data = json.load(fin)['Questions']
       for ex in data:
         self.numparses2count[len(ex['Parses'])] += 1
+        answers = [[a['EntityName'] or a['AnswerArgument']] for a in ex['Parses'][0]['Answers']]
         result[ex['QuestionId']] = {
           'id': ex['QuestionId'],
           'question': ex['ProcessedQuestion'],
-          'answers': [a['EntityName'] or a['AnswerArgument'] for a in ex['Parses'][0]['Answers']]
+          'answers': answers
         }
       return result
 
@@ -54,12 +55,17 @@ class ComplexWebQuestion(object):
       result = {}
       data = json.load(fin)
       for ex in data:
+        dedup_answers = []
+        for anss in ex['answers']:
+          ans: str = anss['answer'] or anss['answer_id']
+          alias: List[str] = anss['aliases']
+          dedup_answers.append([ans] + list(set(alias) - {ans}))
         result[ex['ID']] = {
           'id': ex['ID'],
           'type': ex['compositionality_type'],
           'question': ex['question'],
           'machine_question': ex['machine_question'],
-          'answers': list(set(aa for a in ex['answers'] for aa in [a['answer'] or a['answer_id']] + a['aliases'])),
+          'answers': dedup_answers,
           'composition_answer': ex['composition_answer'],
           'webqsp_ID': ex['webqsp_ID'],
         }
@@ -71,6 +77,10 @@ class ComplexWebQuestion(object):
     sec_a = wq['answers']
     multi_q = cwq['question']
     multi_a = cwq['answers']
+    sec_a_f = MultihopQuestion.format_multi_answers_with_alias(sec_a, only_first_alias=True)
+    multi_a_f = MultihopQuestion.format_multi_answers_with_alias(multi_a, only_first_alias=True)
+    assert sec_a_f == multi_a_f, 'answer inconsistent:\n{}\n{}'.format(sec_a_f, multi_a_f)
+    sec_a = multi_a  # use alias
     for i in range(len(sec_q)):
       if sec_q[i] != cwq['machine_question'][i]:
         break
@@ -80,7 +90,7 @@ class ComplexWebQuestion(object):
         break
     end = len(cwq['machine_question']) - i
     fir_q = 'return ' + cwq['machine_question'][start:end].strip()
-    fir_a = [cwq['composition_answer']]
+    fir_a = [[cwq['composition_answer']]]
     return MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
                             {'q': multi_q, 'a': multi_a}, ind=cwq['id'])
 
@@ -92,9 +102,11 @@ class ComplexWebQuestion(object):
     multi_a = cwq['answers']
     assert cwq['machine_question'].startswith(wq['question']), 'no substring in conjunction'
     sec_q = cwq['machine_question'][len(wq['question']):].strip()
-    for rem in ['and', 'is', 'was', 'are', 'were']:
-      sec_q = sec_q.lstrip(rem).strip()
-    sec_q = 'return ' + sec_q + ' from ' + ', '.join(fir_a)
+    sec_q = sec_q.lstrip('and').strip()
+    #for rem in ['is', 'was', 'are', 'were']:
+    #  sec_q = sec_q.lstrip(rem).strip()
+    #sec_q = 'return ' + sec_q + ' from ' + ', '.join(fir_a)
+    sec_q = 'Which one of the following {}: {}?'.format(sec_q, MultihopQuestion.format_multi_answers_with_alias(fir_a, only_first_alias=True, ans_sep=', '))
     sec_q = sec_q.replace(' from after ', ' after ').replace(' from before ', ' before ')
     sec_a = cwq['answers']
     return MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
