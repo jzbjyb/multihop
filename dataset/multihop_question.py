@@ -23,22 +23,22 @@ class MultihopQuestion(object):
     return question
 
 
-  def format_answer(self, answer: Union[str, List[List[str]]]):
+  def format_answer(self, answer: Union[str, List[str], List[List[str]]]):
     if type(answer) is str:
       return answer.strip()
     else:
-      return [[a.strip() for a in anss] for anss in answer]
+      return [[a.strip() for a in anss] if type(anss) is list else anss.strip() for anss in answer]
 
 
   @staticmethod
-  def format_multi_answers_with_alias(answers: List[List[str]],
+  def format_multi_answers_with_alias(answers: Union[List[List[str]], List[str]],
                                       only_first_alias: bool=False,
                                       ans_sep: str='\t\t',
                                       alias_sep: str='\t'):
     if only_first_alias:
-      return ans_sep.join(anss[0] for anss in answers)
+      return ans_sep.join(anss[0] if type(anss) is list else anss for anss in answers)
     else:
-      return ans_sep.join(alias_sep.join(anss) for anss in answers)
+      return ans_sep.join(alias_sep.join(anss) if type(anss) is list else anss for anss in answers)
 
 
   def __str__(self):

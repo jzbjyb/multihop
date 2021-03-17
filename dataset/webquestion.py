@@ -22,7 +22,7 @@ class WebQuestion(object):
       data = json.load(fin)['Questions']
       for ex in data:
         self.numparses2count[len(ex['Parses'])] += 1
-        answers = [[a['EntityName'] or a['AnswerArgument']] for a in ex['Parses'][0]['Answers']]
+        answers = [a['EntityName'] or a['AnswerArgument'] for a in ex['Parses'][0]['Answers']]
         result[ex['QuestionId']] = {
           'id': ex['QuestionId'],
           'question': ex['ProcessedQuestion'],
