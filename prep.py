@@ -15,12 +15,47 @@ from dataset import Break, HoptopQA, WebQuestion, ComplexWebQuestion, SlingExtra
 from rag.utils_rag import exact_match_score, f1_score
 from rag.eval_rag import get_scores
 
+eval_stat = {
+  'multi': [0, 0],
+  'single': [0, 0]
+}
+
 
 numhops2temps: Dict[int, List[str]] = {
   #2: ['n-*', 'p-*', '*-n', '*-p', 'n-n', 'n-p', 'p-n', 'p-p']
   2: ['n-*', '*-n', 'n-n']
 }
 i2ph = {0: 'XXX', 1: 'YYY', 2: 'ZZZ', 3: 'AAA', 4: 'BBB', 5: 'CCC', 6: 'DDD', 7: 'EEE', 8: 'FFF', 9: 'GGG', 10: 'HHH'}
+
+
+def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t'):
+  if eval_mode == 'multi-multi':
+    predictions = predictions.split(pred_sep)
+    targets = [ans.split(alias_sep) for ans in targets.split(ans_sep)]
+    if len(targets) > 1:
+      eval_stat['multi'][-1] += 1
+    else:
+      eval_stat['single'][-1] += 1
+    if len(predictions) != len(targets):
+      return False
+    for pred, tar in zip(predictions, targets):
+      score = np.max([exact_match_score(pred, t) for t in tar])
+      if not score:
+        return False
+    if len(targets) > 1:
+      eval_stat['multi'][0] += 1
+    else:
+      eval_stat['single'][0] += 1
+    return True
+  elif eval_mode == 'multi-single':
+    predictions = predictions.split(pred_sep)
+    targets = [a for ans in targets.split(ans_sep) for a in ans.split(alias_sep)]
+    score = np.max([exact_match_score(p, t) for t in targets for p in predictions])
+    return score
+  elif eval_mode == 'single-single':
+    targets = set(targets.split(alias_sep)) - {''}
+    score = np.max([exact_match_score(predictions, t) for t in targets])
+    return score
 
 
 def get_se():
@@ -301,20 +336,34 @@ def gold_retrieval_compare(source_file: str, target_file: str, pred_file: str,
     np.mean(raw_em_li[~is_multi_li]) * 100, np.mean(new_em_li[~is_multi_li]) * 100, np.mean(gold_em_li[~is_multi_li]) * 100))
 
 
+def convert_to_unifiedqa_ol(source_file: str, target_file: str, output_file: str, use_multihop: bool=True, num_hop: int=2, sep: str=' # '):
+  count = 0
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(output_file, 'w') as fout:
+    for i, l in enumerate(sfin):
+      question = l.strip()
+      answers = [ans.split('\t')[0] for ans in tfin.readline().rstrip('\n').split('\t\t')]
+      if not use_multihop and (i + 1) % (num_hop + 1) == 0:
+        continue
+      fout.write('{}\t{}\t{}\t{}\n'.format(count, question, sep.join(answers), 0))
+      count += 1
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
     'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace',
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
-    'combine_tomultihop', 'gold_ret', 'gold_ret_compare'], default='hotpotqa')
+    'combine_tomultihop', 'gold_ret', 'gold_ret_compare',
+    'convert_unifiedqa_ol', 'break_unifiedqa_output'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
-  parser.add_argument('--output', type=str)
+  parser.add_argument('--output', type=str, default=None)
   parser.add_argument('--split', type=str, default='dev')
   parser.add_argument('--num_hops', type=int, default=2)
   parser.add_argument('--num_para', type=int, default=1)
   parser.add_argument('--thres', type=float, default=.0)
+  parser.add_argument('--eval_mode', type=str, choices=['multi-multi', 'multi-single', 'single-single'], default='single-single')
   parser.add_argument('--no_context', action='store_true')
   args = parser.parse_args()
 
@@ -459,9 +508,9 @@ if __name__ == '__main__':
           pass
         else:
           continue
-        targets = tfin.readline().rstrip('\n').split('\t')
+        targets = tfin.readline().rstrip('\n')
         addition = afin.readline().rstrip('\n')
-        em_li = [max(exact_match_score(pred, target) for target in targets) for pred in preds]
+        em_li = [evaluation(pred, targets, eval_mode=args.eval_mode) for pred in preds]
         em = max(em_li)
         ems.append(em)
         ems_first.append(em_li[0])
@@ -514,6 +563,11 @@ if __name__ == '__main__':
     printstat(non_cate, norm=True)
     printstat(para_cate)
     printstat(np_cate)
+
+    print('multi eval stat:', eval_stat)
+
+    if args.output is None:
+      exit()
 
     with open(args.output, 'w') as fout:
       for cate, cases in non_cate_case.items():
@@ -961,3 +1015,52 @@ if __name__ == '__main__':
     print('all ret')
     gold_retrieval_compare(source_file, target_file, pred_file, ret_pred_file, ret_file_id,
                            gold_pred_file=gold_pred_file, use_first_ret=False)
+
+  elif args.task == 'convert_unifiedqa_ol':
+    source_file, target_file = args.input
+    output_file = args.output
+    convert_to_unifiedqa_ol(source_file, target_file, output_file, use_multihop=True, num_hop=2)
+
+  elif args.task == 'break_unifiedqa_output':
+    uq_out_file = args.input[0]
+    target_files = args.input[1:]
+    assert len(target_files) % 2 == 0
+    target_names = target_files[0:len(target_files):2]
+    target_files = target_files[1:len(target_files):2]
+    cur_tar_file = None
+    cur_out_file = None
+    target_ind = -1
+    count = 0
+
+    def load_new():
+      global cur_tar_file, cur_out_file, target_ind, count
+      if cur_tar_file is not None:
+        cur_tar_file.close()
+        print('{} count {}'.format(target_names[target_ind], count))
+      if cur_out_file is not None:
+        cur_out_file.close()
+      count = 0
+      target_ind += 1
+      if len(target_files) <= target_ind:
+        return False
+      cur_tar_file = open(target_files[target_ind], 'r')
+      cur_out_file = open(uq_out_file + '.' + target_names[target_ind], 'w')
+      return True
+
+    with open(uq_out_file, 'r') as fin:
+      for l in fin:
+        sucess = True
+        while True:
+          # if everything is fine, write
+          if cur_tar_file is not None:
+            t = cur_tar_file.readline()
+            if t != '':
+              cur_out_file.write(l)
+              count += 1
+              break
+          # not fine, open new files
+          sucess = load_new()
+          if not sucess:
+            break
+        if not sucess:
+          break
