@@ -17,7 +17,8 @@ from rag.eval_rag import get_scores
 
 eval_stat = {
   'multi': [0, 0],
-  'single': [0, 0]
+  'single': [0, 0],
+  'multi-predictions': [0, 0],
 }
 
 
@@ -36,6 +37,8 @@ def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pre
       eval_stat['multi'][-1] += 1
     else:
       eval_stat['single'][-1] += 1
+    if len(predictions) > 1:
+      eval_stat['multi-predictions'][-1] += 1
     if len(predictions) != len(targets):
       return False
     for pred, tar in zip(predictions, targets):
@@ -46,6 +49,8 @@ def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pre
       eval_stat['multi'][0] += 1
     else:
       eval_stat['single'][0] += 1
+    if len(predictions) > 1:
+      eval_stat['multi-predictions'][0] += 1
     return True
   elif eval_mode == 'multi-single':
     predictions = predictions.split(pred_sep)
@@ -237,10 +242,12 @@ def entity_linking_on_elq(input_file: str, output_file: str, dataset: Union[Grap
   print('find {} among {} answer entities'.format(found, total))
 
 
-def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, output_file: str, num_gold: int=1):
+def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, output_file: str,
+                        num_gold: int=1, ans_sep: str='\t\t', alias_sep: str='\t', num_hop: int=2):
   pos2gold: Dict[int, int] = defaultdict(lambda: 0)
   hasgold2count: Dict[int, int] = defaultdict(lambda: 0)
   fould_gold = total = 0
+  prev_docs = []
   with open(source_file, 'r') as sfin, \
     open(target_file, 'r') as tfin, \
     open(ret_file, 'r') as rfin, \
@@ -248,19 +255,37 @@ def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, outpu
     open(output_file + '.id', 'w') as ifout:
     for id, l in enumerate(sfin):
       question = l.strip().split('\t')[0]
-      answers = tfin.readline().strip().split('\t')
+      answers = [ans.split(alias_sep) for ans in tfin.readline().strip().split(ans_sep)]
       docs = rfin.readline().strip().split('\t')[:-1]
       docs = [doc.split(' || ') for doc in docs]
       has_gold = 0
-      for i, doc in enumerate(docs):
-        for answer in answers:
-          if answer.lower() in (doc[1] + ' ' + doc[2]).lower():
+      if (id + 1) % (num_hop + 1) == 0:  # multihop
+        if len(prev_docs) >= 2 and prev_docs[-1][0] == id - 1 and prev_docs[-2][0] == id - 2:
+          has_gold = 1
+          fout.write('{}\t{}\t{}\n'.format(
+            question, '{} {}'.format(prev_docs[-2][1], prev_docs[-1][1]), '{} {}'.format(prev_docs[-2][2], prev_docs[-1][2])))
+          ifout.write('{}\n'.format(id))
+      else:
+        for i, doc in enumerate(docs):
+          find_all = True
+          for answer in answers:
+            find = False
+            for alias in answer:
+              if alias.lower() in (doc[1] + ' ' + doc[2]).lower():
+                find = True
+                break
+            if not find:
+              find_all = False
+              break
+          if find_all:
             pos2gold[i] += 1
             has_gold += 1
             if has_gold <= num_gold:
+              prev_docs.append((id, doc[1], doc[2]))
               fout.write('{}\t{}\t{}\n'.format(question, doc[1], doc[2]))
               ifout.write('{}\n'.format(id))
-            break
+            else:
+              break
       fould_gold += int(has_gold > 0)
       hasgold2count[has_gold] += 1
       total += 1
@@ -293,13 +318,13 @@ def gold_retrieval_compare(source_file: str, target_file: str, pred_file: str,
     for i, l in enumerate(sfin):
       is_multi = (i + 1) % (num_hop + 1) == 0
       question = l.strip().split('\t')[0]
-      targets = tfin.readline().strip().split('\t')
+      targets = tfin.readline().strip()
       pred = pfin.readline().rstrip('\n').split('\t')[0]
       ret_preds = id2preds[i]
       if len(ret_preds) <= 0:
         continue
-      raw_em = max(exact_match_score(pred, target) for target in targets)
-      new_ems = [max(exact_match_score(ret_pred, target) for target in targets) for ret_pred in ret_preds]
+      raw_em = evaluation(pred, targets, eval_mode=args.eval_mode)
+      new_ems = [evaluation(ret_pred, targets, eval_mode=args.eval_mode) for ret_pred in ret_preds]
       new_em = new_ems[0] if use_first_ret else max(new_ems)
       raw_em_li.append(raw_em)
       new_em_li.append(new_em)
@@ -315,11 +340,11 @@ def gold_retrieval_compare(source_file: str, target_file: str, pred_file: str,
         i = i * 3 + ni // 2
         if ni not in {0, 2, 4}:
           continue
-        targets = tfin.readline().strip().split('\t')
+        targets = tfin.readline().strip()
         if len(id2preds[i]) <= 0:
           continue
         pred = l.rstrip('\n').split('\t')[0]
-        gold_em_li.append(max(exact_match_score(pred, target) for target in targets))
+        gold_em_li.append(evaluation(pred, targets, eval_mode=args.eval_mode))
   if len(gold_em_li) <= 0:
     gold_em_li = [0] * len(new_em_li)
 
@@ -334,15 +359,38 @@ def gold_retrieval_compare(source_file: str, target_file: str, pred_file: str,
     np.mean(raw_em_li[is_multi_li]) * 100, np.mean(new_em_li[is_multi_li]) * 100, np.mean(gold_em_li[is_multi_li]) * 100))
   print('[SINGLE] ret {:.2f} pseudo gold {:.2f} gold {:.2f}'.format(
     np.mean(raw_em_li[~is_multi_li]) * 100, np.mean(new_em_li[~is_multi_li]) * 100, np.mean(gold_em_li[~is_multi_li]) * 100))
+  print('eval_stat {}'.format(eval_stat))
 
 
-def convert_to_unifiedqa_ol(source_file: str, target_file: str, output_file: str, use_multihop: bool=True, num_hop: int=2, sep: str=' # '):
+def gold_ret_filter(ret_file: str, ret_file_id: str, output_file: str, num_hop: int=2):
+  prev_lines = []
+  prev_ids = []
+  count = 0
+  with open(ret_file, 'r') as rfin, open(ret_file_id, 'r') as rifin, open(output_file, 'w') as fout, open(output_file + '.id', 'w') as ifout:
+    for l in rfin:
+      id = int(rifin.readline().strip())
+      if (id + 1) % (num_hop + 1) == 0:  # multihop
+        if len(prev_ids) > 1 and prev_ids[-1] == id - 1 and prev_ids[-2] == id - 2:
+          fout.write(prev_lines[-2])
+          fout.write(prev_lines[-1])
+          fout.write(l)
+          ifout.write('{}\n'.format(prev_ids[-2]))
+          ifout.write('{}\n'.format(prev_ids[-1]))
+          ifout.write('{}\n'.format(id))
+          count += 1
+      else:
+        prev_ids.append(id)
+        prev_lines.append(l)
+  print('found {} with both single and multihop'.format(count))
+
+
+def convert_to_unifiedqa_ol(source_file: str, target_file: str, output_file: str, use_hop: Set[int]={1, 2, 0}, num_hop: int=2, sep: str=' # '):
   count = 0
   with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(output_file, 'w') as fout:
     for i, l in enumerate(sfin):
       question = l.strip()
       answers = [ans.split('\t')[0] for ans in tfin.readline().rstrip('\n').split('\t\t')]
-      if not use_multihop and (i + 1) % (num_hop + 1) == 0:
+      if (i + 1) % (num_hop + 1) not in use_hop:
         continue
       fout.write('{}\t{}\t{}\t{}\n'.format(count, question, sep.join(answers), 0))
       count += 1
@@ -354,7 +402,7 @@ if __name__ == '__main__':
     'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace',
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
-    'combine_tomultihop', 'gold_ret', 'gold_ret_compare',
+    'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter',
     'convert_unifiedqa_ol', 'break_unifiedqa_output'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
@@ -564,7 +612,7 @@ if __name__ == '__main__':
     printstat(para_cate)
     printstat(np_cate)
 
-    print('multi eval stat:', eval_stat)
+    print('eval_stat:', eval_stat)
 
     if args.output is None:
       exit()
@@ -1003,7 +1051,7 @@ if __name__ == '__main__':
   elif args.task == 'gold_ret':
     source_file, target_file, ret_file = args.input
     output_file = args.output
-    num_gold = 5
+    num_gold = 1
     find_gold_retrieval(source_file, target_file, ret_file, output_file, num_gold=num_gold)
 
   elif args.task == 'gold_ret_compare':
@@ -1016,10 +1064,15 @@ if __name__ == '__main__':
     gold_retrieval_compare(source_file, target_file, pred_file, ret_pred_file, ret_file_id,
                            gold_pred_file=gold_pred_file, use_first_ret=False)
 
+  elif args.task == 'gold_ret_filter':
+    ret_file, ret_file_id = args.input
+    output_file = args.output
+    gold_ret_filter(ret_file, ret_file_id, output_file)
+
   elif args.task == 'convert_unifiedqa_ol':
     source_file, target_file = args.input
     output_file = args.output
-    convert_to_unifiedqa_ol(source_file, target_file, output_file, use_multihop=True, num_hop=2)
+    convert_to_unifiedqa_ol(source_file, target_file, output_file, use_hop={1, 0}, num_hop=2)
 
   elif args.task == 'break_unifiedqa_output':
     uq_out_file = args.input[0]

@@ -158,9 +158,12 @@ class GenerativeQAModule(BaseTransformer):
                         passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset'),
                         index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss'))
                 else:
-                    retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))
-                    #retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', index_name='exact', use_dummy_dataset=True)
-                    #retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
+                    if self.retrieval_mode == 'no':
+                        retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-nq', index_name="exact", use_dummy_dataset=True)
+                    else:
+                        retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))
+                        #retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', index_name='exact', use_dummy_dataset=True)
+                        #retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
             elif hparams.distributed_retriever == "ray":
                 # The Ray retriever needs the handles to the retriever actors.
                 retriever = RagRayDistributedRetriever.from_pretrained(

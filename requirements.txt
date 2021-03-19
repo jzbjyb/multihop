@@ -1,5 +1,5 @@
 datasets==1.2.1
-faiss==1.6.5
+faiss-cpu==1.6.5
 GitPython==3.1.12
 transformers==4.2.1
 psutil==5.8.0

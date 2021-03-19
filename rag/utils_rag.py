@@ -71,6 +71,8 @@ class Seq2SeqDataset(Dataset):
             self.src_lens = self.src_lens[:n_obs]
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
+        self.title_sep = ' / '
+        self.doc_sep = ' // '
 
     def __len__(self):
         return len(self.src_lens)
@@ -78,6 +80,9 @@ class Seq2SeqDataset(Dataset):
     def __getitem__(self, index) -> Dict[str, torch.Tensor]:
         index = index + 1  # linecache starts at 1
         source_line = self.prefix + linecache.getline(str(self.src_file), index).rstrip("\n")
+        if '\t' in source_line:  # has context
+            q, title, text = source_line.split('\t')
+            source_line = title + self.title_sep + text + self.doc_sep + q
         tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")
         assert source_line, f"empty source line for index {index}"
         assert tgt_line, f"empty tgt line for index {index}"
