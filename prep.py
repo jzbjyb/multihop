@@ -256,7 +256,10 @@ def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, outpu
     for id, l in enumerate(sfin):
       question = l.strip().split('\t')[0]
       answers = [ans.split(alias_sep) for ans in tfin.readline().strip().split(ans_sep)]
-      docs = rfin.readline().strip().split('\t')[:-1]
+      docs = rfin.readline()
+      if docs == '':
+        break
+      docs = docs.strip().split('\t')[:-1]
       docs = [doc.split(' || ') for doc in docs]
       has_gold = 0
       if (id + 1) % (num_hop + 1) == 0:  # multihop
@@ -396,6 +399,26 @@ def convert_to_unifiedqa_ol(source_file: str, target_file: str, output_file: str
       count += 1
 
 
+def combine_split(source_files: List[str], target_files: List[str], output_dir: str, split: str,
+                  num_hop: int=2, ans_sep: str='\t\t', alias_sep: str='\t', join_sep: str=' # '):
+  sub_dirs = ['ssm', 'ss-', 's-m', '-sm']  # only works for num_hop=2
+  filter_inds = [{0, 1, 2}, {0, 1}, {0, 2}, {1, 2}]
+  for sub_dir, filter_ind in zip(sub_dirs, filter_inds):
+    os.makedirs(os.path.join(output_dir, sub_dir), exist_ok=True)
+    s_outfile = os.path.join(output_dir, sub_dir, split + '.source')
+    t_outfile = os.path.join(output_dir, sub_dir, split + '.target')
+    with open(s_outfile, 'w') as sfout, open(t_outfile, 'w') as tfout:
+      for sf, tf in zip(source_files, target_files):
+        with open(sf, 'r') as sfin, open(tf, 'r') as tfin:
+          for i, s in enumerate(sfin):
+            t = tfin.readline()
+            if i % (num_hop + 1) not in filter_ind:
+              continue
+            sfout.write(s)
+            t = join_sep.join([a.split(alias_sep)[0] for a in t.strip().split(ans_sep)])
+            tfout.write(t + '\n')
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -403,7 +426,7 @@ if __name__ == '__main__':
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
     'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter',
-    'convert_unifiedqa_ol', 'break_unifiedqa_output'], default='hotpotqa')
+    'convert_unifiedqa_ol', 'break_unifiedqa_output', 'filter_hotpotqa', 'combine_split', 'find_target'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1073,6 +1096,30 @@ if __name__ == '__main__':
     source_file, target_file = args.input
     output_file = args.output
     convert_to_unifiedqa_ol(source_file, target_file, output_file, use_hop={1, 0}, num_hop=2)
+
+  elif args.task == 'combine_split':
+    source_files = args.input
+    target_files = [f.replace('.source', '.target') for f in source_files]
+    output_dir = args.output
+    combine_split(source_files, target_files, output_dir, split=args.split, num_hop=2)
+
+  elif args.task == 'find_target':
+    source_file, id_file, target_file = args.input
+    output = source_file.replace('.source', '.target')
+    i2t = {}
+    with open(target_file, 'r') as fin:
+      for i, l in enumerate(fin):
+        i2t[i] = l
+    with open(id_file, 'r') as fin, open(output, 'w') as fout:
+      for i in fin:
+        i = int(i.strip())
+        fout.write(i2t[i])
+
+  elif args.task == 'filter_hotpotqa':
+    with open(args.input[0], 'r') as fin, open(args.output, 'w') as fout:
+      for i, l in enumerate(fin):
+        if i % 8 in {0, 2, 4}:
+          fout.write(l)
 
   elif args.task == 'break_unifiedqa_output':
     uq_out_file = args.input[0]
