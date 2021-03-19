@@ -549,12 +549,14 @@ if __name__ == '__main__':
     score_file = args.input[4] if len(args.input) > 4 else add_file
     ems = []
     ems_first = []
+    ems_first_sh = []
+    ems_first_mh = []
     groups = []
     cases = []
     cates = []
 
     addtion_res = None
-    if 'cwq' in pred_file:
+    if 'cwq' in pred_file or 'complexwebq' in pred_file:
       addtion_res = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq',
                                        webq=WebQuestion('../Break/break_dataset/QDMR/webqsp'))
     if 'op' in add_file:
@@ -594,6 +596,10 @@ if __name__ == '__main__':
             cates.append(addtion_res(addition))
           else:
             cates.append('')
+        if ((i // args.num_para) + 1) % len(numhops2temps[args.num_hops]) == 0:  # multihop
+          ems_first_mh.append(em_li[0])
+        else:
+          ems_first_sh.append(em_li[0])
         groups[-1].append(em)
         if numhops2temps[args.num_hops][i % len(numhops2temps[args.num_hops])] in {'n-*', '*-n', 'n-n'}:
           scores[0] = (0, 0)
@@ -606,7 +612,9 @@ if __name__ == '__main__':
         preds = []
         sources = []
         scores = []
-    print('em {:.2f}, only first {:.2f}'.format(np.mean(ems) * 100, np.mean(ems_first) * 100))
+    print(len(ems_first_mh), len(ems_first_sh))
+    print('em {:.2f}, only first {:.2f}, sh {:.2f}, mh {:.2f}'.format(
+      np.mean(ems) * 100, np.mean(ems_first) * 100, np.mean(ems_first_sh) * 100, np.mean(ems_first_mh) * 100))
     temps = numhops2temps[args.num_hops]
     groups = [dict(zip(temps, group)) for group in groups]
 
@@ -639,6 +647,8 @@ if __name__ == '__main__':
 
     if args.output is None:
       exit()
+    if args.output in args.input:
+      raise Exception('output exists')
 
     with open(args.output, 'w') as fout:
       for cate, cases in non_cate_case.items():
@@ -1104,16 +1114,22 @@ if __name__ == '__main__':
     combine_split(source_files, target_files, output_dir, split=args.split, num_hop=2)
 
   elif args.task == 'find_target':
-    source_file, id_file, target_file = args.input
+    source_file, id_file, target_file, type_file = args.input
     output = source_file.replace('.source', '.target')
+    output_id = id_file + '.id'
     i2t = {}
+    i2type = {}
     with open(target_file, 'r') as fin:
       for i, l in enumerate(fin):
         i2t[i] = l
-    with open(id_file, 'r') as fin, open(output, 'w') as fout:
+    with open(type_file, 'r') as fin:
+      for i, l in enumerate(fin):
+        i2type[i] = l
+    with open(id_file, 'r') as fin, open(output, 'w') as fout, open(output_id, 'w') as ifout:
       for i in fin:
         i = int(i.strip())
         fout.write(i2t[i])
+        ifout.write(i2type[i])
 
   elif args.task == 'filter_hotpotqa':
     with open(args.input[0], 'r') as fin, open(args.output, 'w') as fout:
