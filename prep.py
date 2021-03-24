@@ -419,6 +419,63 @@ def combine_split(source_files: List[str], target_files: List[str], output_dir: 
             tfout.write(t + '\n')
 
 
+def convert_to_reducehop_uq(tsv_file: str, outfile: str, num_hop: int=2):
+    with open(tsv_file, 'r') as fin, open(outfile, 'w') as fout:
+      prev_first = None
+      prev_second = None
+      count = 0
+      for i, l in enumerate(fin):
+        if i % (num_hop + 1) == 0:  # first singlehop
+          prev_first = l
+        elif i % (num_hop + 1) == 1:  # second singlehop
+          prev_second = l
+        elif i % (num_hop + 1) == num_hop:  # multihop
+          secq, seca = prev_second.rstrip('\n').split('\t')[1:3]
+          mhq, mha = l.rstrip('\n').split('\t')[1:3]
+          # multi -> 2hop
+          fout.write('{}\t{}\t{}\t{}\n'.format(count, mhq, secq, 0))
+          # 2hop -> ans
+          fout.write('{}\t{}\t{}\t{}\n'.format(count + 1, secq, mha, 0))
+          count += 2
+        else:
+          raise NotImplementedError
+
+
+def convert_to_reducehop(source_file: str, target_file: str, out_source_file: str, out_target_file: str,
+                         has_ret: bool = False, num_hop: int = 2):
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
+    open(out_source_file, 'w') as sfout, open(out_target_file, 'w') as tfout:
+    prev_first_source = None
+    prev_second_source = None
+    for i, l in enumerate(sfin):
+      source = l
+      target = tfin.readline()
+      if i % (num_hop + 1) == 0:  # first singlehop
+        prev_first_source = source
+      elif i % (num_hop + 1) == 1:  # second singlehop
+        prev_second_source = source
+      elif i % (num_hop + 1) == num_hop:  # multihop
+        if has_ret:
+          mhq = source.split('\t', 1)[0]
+          secq = prev_second_source.split('\t', 1)[0]
+          first_context = prev_first_source.rstrip('\n').split('\t')[1:3]
+          # multi -> 2hop
+          sfout.write('{}\t{}\t{}\n'.format(mhq, first_context[0], first_context[1]))
+          tfout.write('{}\n'.format(secq))
+          # 2hop -> ans
+          sfout.write(prev_second_source)
+          tfout.write(target)
+        else:
+          # multi -> 2hop
+          sfout.write(source)
+          tfout.write(prev_second_source)
+          # 2hop -> ans
+          sfout.write(prev_second_source)
+          tfout.write(target)
+      else:
+        raise NotImplementedError
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -426,7 +483,8 @@ if __name__ == '__main__':
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
     'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter',
-    'convert_unifiedqa_ol', 'break_unifiedqa_output', 'filter_hotpotqa', 'combine_split', 'find_target'], default='hotpotqa')
+    'convert_unifiedqa_ol', 'break_unifiedqa_output', 'filter_hotpotqa',
+    'combine_split', 'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1180,3 +1238,13 @@ if __name__ == '__main__':
             break
         if not sucess:
           break
+
+  elif args.task == 'convert_to_reducehop':
+    source_file, target_file = args.input
+    out_source_file, out_target_file = source_file + '.reducehop', target_file + '.reducehop'
+    convert_to_reducehop(source_file, target_file, out_source_file, out_target_file, has_ret=True)
+
+  elif args.task == 'convert_to_reducehop_uq':
+    tsv_file = args.input[0]
+    outfile = args.output
+    convert_to_reducehop_uq(tsv_file, outfile)
