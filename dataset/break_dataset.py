@@ -1,4 +1,4 @@
-from typing import Dict, List, Iterable, Set
+from typing import Dict, List, Iterable, Set, Tuple
 import os
 import csv
 import json
@@ -78,7 +78,11 @@ class Break(object):
     setattr(self, split, new_data)
 
 
-  def get_hop_n(self, hop: int, split: str, origins: Set[str]=None):
+  def get_hop_n(self, hop: int, split: str, use_prediction: bool=False, has_ret: bool=False, origins: Set[str]=None):
+    if use_prediction:
+      raise NotImplementedError
+    if has_ret:
+      raise NotImplementedError
     id2q = {}
     for id, entry in getattr(self, split).items():
       origin, _split, _id = self.parse_id(id)
@@ -131,3 +135,73 @@ class Break(object):
       if item in getattr(self, split):
         return getattr(self, split)[item]
     raise KeyError(item)
+
+
+class PseudoBreak(object):
+  def __init__(self, domains: List[str], source_target_files: List[Tuple[str, str]], num_hop: int=2):
+    print('loading PseudoBreak ...')
+    self.domains = domains
+    self.max_hop = num_hop
+    self.data = self.load_source_target(domains, source_target_files, num_hop=num_hop)
+
+
+  def load_source_target(self, domains: List[str], source_target_files: List[Tuple[str, str]], num_hop: int=2) -> Dict:
+    data = defaultdict(dict)
+    assert len(domains) == len(source_target_files)
+    for domain, (sf, tf) in zip(domains, source_target_files):
+      with open(sf, 'r') as sfin, open(tf, 'r') as tfin:
+        for i, source in enumerate(sfin):
+          source = source.rstrip('\n')
+          target = tfin.readline().rstrip('\n')
+          qid = i // num_hop
+          key = '{}-{}'.format(domain, qid)
+          data[key]['question_id'] = key
+          data[key]['domain'] = domain
+          '''
+          if i % (num_hop + 1) == num_hop:  # multihop
+            data[key]['question_text'] = source
+            data[key]['answers'] = target
+          '''
+          # single hop
+          if 'decomposition_instantiated' not in data[key]:
+            data[key]['decomposition_prediction'] = []
+            data[key]['decomposition_instantiated'] = []
+            data[key]['decomposition_answer'] = []
+          data[key]['decomposition_prediction'].append(None)
+          data[key]['decomposition_instantiated'].append(source)
+          data[key]['decomposition_answer'].append(target)
+          if i >= 9:
+            break
+    return data
+
+
+  def get_hop_n(self, hop: int, use_prediction: bool=False, has_ret: bool=False, **kwargs):
+    id2q = {}
+    for id, entry in self.data.items():
+      if hop == -1:  # multihop
+        id2q[id] = entry['question_text']
+      else:
+        if use_prediction and hop > 0:
+          if len(entry['decomposition_prediction']) > hop - 1 and entry['decomposition_prediction'][hop - 1] is not None:
+            q = entry['decomposition_prediction'][hop - 1]
+            if has_ret:
+              q = '\t'.join([q] + entry['decomposition_instantiated'][hop].split('\t')[1:])
+            id2q[id] = q
+        else:
+          if len(entry['decomposition_instantiated']) > hop and entry['decomposition_instantiated'][hop] is not None:
+            q = entry['decomposition_instantiated'][hop]
+            id2q[id] = q
+    return id2q
+
+
+  def instantiate_hop_n(self, id2ans: Dict[str, str], hop: int, **kwargs):
+    for id, ans in id2ans.items():
+      if hop == -1:  # multihop
+        self.data[id]['prediction'] = ans
+      else:
+        self.data[id]['decomposition_prediction'][hop] = ans
+
+
+  def save(self, split: str, output: str):
+    with open(output, 'w') as fout:
+      json.dump(self.data, fout, indent=2)

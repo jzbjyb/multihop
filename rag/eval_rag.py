@@ -22,7 +22,7 @@ sys.path.append(os.path.join(os.getcwd()))  # noqa: E402 # isort:skip
 from utils_rag import exact_match_score, f1_score  # noqa: E402 # isort:skip
 from rag_model import MyRagSequenceForGeneration
 from finetune_rag import GenerativeQAModule, root_to_mdr
-from dataset import Break
+from dataset import Break, PseudoBreak
 
 
 logger = logging.getLogger(__name__)
@@ -371,7 +371,7 @@ def get_args():
     )
     parser.add_argument(
         "--eval_mode",
-        choices=["e2e", "retrieval", "e2ec", "break", "retrieval_all"],
+        choices=["e2e", "retrieval", "e2ec", "break", "pseudo_break", "retrieval_all"],
         default="e2e",
         type=str,
         help="Evaluation mode, e2e calculates exact match and F1 of the downstream task, retrieval calculates precision@k.",
@@ -548,6 +548,9 @@ def main(args):
     elif args.eval_mode == 'break':
         evaluate_batch_fn = evaluate_batch_e2e_multihop_retrieval
         score_fn = get_scores
+    elif args.eval_mode == 'pseudo_break':
+        evaluate_batch_fn = evaluate_batch_e2e_with_context
+        score_fn = get_scores
     elif args.eval_mode == 'retrieval_all':
         evaluate_batch_fn = evaluate_batch_retrieval_all
         score_fn = get_scores
@@ -566,7 +569,7 @@ def main(args):
         logger.info("  Predictions will be stored under {}".format(args.predictions_path))
 
         if args.model_type.startswith("rag"):
-            if args.eval_mode == 'e2ec':
+            if args.eval_mode in {'e2ec', 'pseudo_break'}:
                 retriever = RagRetriever.from_pretrained('facebook/rag-sequence-nq', index_name="exact", use_dummy_dataset=True)
             else:
                 if args.use_mdr:
@@ -592,14 +595,24 @@ def main(args):
 
         model.to(args.device)
 
-        if args.eval_mode == 'break':
+        if args.eval_mode in {'break', 'pseudo_break'}:
+            eval_multi = [-1] if args.eval_mode == 'break' else []
+            use_prediction = True
+            has_ret = True
             split = 'dev'
             batch_size = args.eval_batch_size
             output_file = args.predictions_path
-            break_dataset = Break('../../Break/break_dataset/QDMR-high-level')
-
-            for nh in list(range(break_dataset.max_hop)) + [-1]:
-                id2q = break_dataset.get_hop_n(nh, split=split)
+            if args.eval_mode == 'break':
+                break_dataset = Break('../../Break/break_dataset/QDMR-high-level')
+            elif args.eval_mode == 'pseudo_break':
+                num_hop = 2
+                source_files = args.evaluation_set.split(':')
+                domains = source_files[0:len(source_files):2]
+                source_files = source_files[1:len(source_files):2]
+                target_files = args.gold_data_path.split(':')
+                break_dataset = PseudoBreak(domains, list(zip(source_files, target_files)), num_hop=num_hop)
+            for nh in list(range(break_dataset.max_hop)) + eval_multi:
+                id2q = break_dataset.get_hop_n(nh, use_prediction=use_prediction, has_ret=has_ret, split=split)
                 print('--- {} with {} questions ---'.format(nh, len(id2q)))
                 if len(id2q) <= 0:
                     continue

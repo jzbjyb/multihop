@@ -484,7 +484,8 @@ if __name__ == '__main__':
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
     'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter',
     'convert_unifiedqa_ol', 'break_unifiedqa_output', 'filter_hotpotqa',
-    'combine_split', 'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq'], default='hotpotqa')
+    'combine_split', 'combine_multi_targets',
+    'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1170,6 +1171,16 @@ if __name__ == '__main__':
     target_files = [f.replace('.source', '.target') for f in source_files]
     output_dir = args.output
     combine_split(source_files, target_files, output_dir, split=args.split, num_hop=2)
+
+  elif args.task == 'combine_multi_targets':
+    join_sep = ' # '
+    alias_sep = '\t'
+    ans_sep = '\t\t'
+    target_file = args.input[0]
+    with open(target_file, 'r') as fin, open(target_file + '.new', 'w') as fout:
+      for l in fin:
+        t = join_sep.join([a.split(alias_sep)[0] for a in l.strip().split(ans_sep)])
+        fout.write(t + '\n')
 
   elif args.task == 'find_target':
     source_file, id_file, target_file, type_file = args.input

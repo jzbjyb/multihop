@@ -1,4 +1,4 @@
-from .break_dataset import Break
+from .break_dataset import Break, PseudoBreak
 from .hotpotqa import HoptopQA
 from .webquestion import WebQuestion, ComplexWebQuestion
 from .wikidata import SlingExtractor
