@@ -4,7 +4,7 @@ import truecase
 
 
 class MultihopQuestion(object):
-  def __init__(self, single_hops: List[Dict], multi_hop: Dict, ind: Any, **kwargs):
+  def __init__(self, single_hops: List[Dict], multi_hop: Dict, ind: Any=None, **kwargs):
     self.single_hops = single_hops
     self.multi_hop = multi_hop
     self.ind = ind
@@ -19,7 +19,7 @@ class MultihopQuestion(object):
   def format_question(self, question: str):
     if not question.strip().lower().startswith('return'):
       question = question.strip().rstrip('?') + '?'
-    question = truecase.get_true_case(question)
+    #question = truecase.get_true_case(question)
     return question
 
 

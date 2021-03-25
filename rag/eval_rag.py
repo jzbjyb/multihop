@@ -597,7 +597,7 @@ def main(args):
 
         if args.eval_mode in {'break', 'pseudo_break'}:
             eval_multi = [-1] if args.eval_mode == 'break' else []
-            use_prediction = True
+            use_prediction = False
             has_ret = True
             split = 'dev'
             batch_size = args.eval_batch_size
@@ -606,11 +606,12 @@ def main(args):
                 break_dataset = Break('../../Break/break_dataset/QDMR-high-level')
             elif args.eval_mode == 'pseudo_break':
                 num_hop = 2
+                has_multihop = True
                 source_files = args.evaluation_set.split(':')
                 domains = source_files[0:len(source_files):2]
                 source_files = source_files[1:len(source_files):2]
                 target_files = args.gold_data_path.split(':')
-                break_dataset = PseudoBreak(domains, list(zip(source_files, target_files)), num_hop=num_hop)
+                break_dataset = PseudoBreak(domains, list(zip(source_files, target_files)), num_hop=num_hop, has_multihop=True)
             for nh in list(range(break_dataset.max_hop)) + eval_multi:
                 id2q = break_dataset.get_hop_n(nh, use_prediction=use_prediction, has_ret=has_ret, split=split)
                 print('--- {} with {} questions ---'.format(nh, len(id2q)))

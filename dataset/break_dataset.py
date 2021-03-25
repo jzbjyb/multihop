@@ -117,14 +117,14 @@ class Break(object):
       json.dump(getattr(self, split), fout, indent=2)
 
 
-  def get_hotpotqa(self, hotpotqa: HoptopQA, split: str) -> Iterable[Dict]:
+  def get_hotpotqa(self, hotpotqa: HoptopQA, split: str, use_ph: bool=False) -> Iterable[Dict]:
     for id, entry in getattr(self, split).items():
       origin, _split, _id = self.parse_id(id)
       if origin != 'HOTPOT' or _split != split:
         continue
       if entry['operators'] != 'select-project':
         continue
-      de = hotpotqa.decompose(id, split, entry)
+      de = hotpotqa.decompose(_id, split, entry, use_ph=use_ph)
       if de is None:
         continue
       yield de
@@ -138,14 +138,15 @@ class Break(object):
 
 
 class PseudoBreak(object):
-  def __init__(self, domains: List[str], source_target_files: List[Tuple[str, str]], num_hop: int=2):
+  def __init__(self, domains: List[str], source_target_files: List[Tuple[str, str]], num_hop: int=2, has_multihop: bool=False):
     print('loading PseudoBreak ...')
     self.domains = domains
     self.max_hop = num_hop
-    self.data = self.load_source_target(domains, source_target_files, num_hop=num_hop)
+    self.has_multihop = has_multihop
+    self.data = self.load_source_target(domains, source_target_files, num_hop=num_hop, has_multihop=has_multihop)
 
 
-  def load_source_target(self, domains: List[str], source_target_files: List[Tuple[str, str]], num_hop: int=2) -> Dict:
+  def load_source_target(self, domains: List[str], source_target_files: List[Tuple[str, str]], num_hop: int=2, has_multihop: bool=False) -> Dict:
     data = defaultdict(dict)
     assert len(domains) == len(source_target_files)
     for domain, (sf, tf) in zip(domains, source_target_files):
@@ -153,25 +154,23 @@ class PseudoBreak(object):
         for i, source in enumerate(sfin):
           source = source.rstrip('\n')
           target = tfin.readline().rstrip('\n')
-          qid = i // num_hop
+          qid = i // (num_hop + int(has_multihop))
           key = '{}-{}'.format(domain, qid)
           data[key]['question_id'] = key
           data[key]['domain'] = domain
-          '''
-          if i % (num_hop + 1) == num_hop:  # multihop
+          if has_multihop and i % (num_hop + 1) == num_hop:  # multihop
             data[key]['question_text'] = source
             data[key]['answers'] = target
-          '''
-          # single hop
-          if 'decomposition_instantiated' not in data[key]:
-            data[key]['decomposition_prediction'] = []
-            data[key]['decomposition_instantiated'] = []
-            data[key]['decomposition_answer'] = []
-          data[key]['decomposition_prediction'].append(None)
-          data[key]['decomposition_instantiated'].append(source)
-          data[key]['decomposition_answer'].append(target)
-          if i >= 9:
-            break
+          else:  # single hop
+            if 'decomposition' not in data[key]:
+              data[key]['decomposition'] = []
+              data[key]['decomposition_prediction'] = []
+              data[key]['decomposition_instantiated'] = []
+              data[key]['decomposition_answer'] = []
+            data[key]['decomposition'].append(source)
+            data[key]['decomposition_prediction'].append(None)
+            data[key]['decomposition_instantiated'].append(source)
+            data[key]['decomposition_answer'].append(target)
     return data
 
 
@@ -200,6 +199,11 @@ class PseudoBreak(object):
         self.data[id]['prediction'] = ans
       else:
         self.data[id]['decomposition_prediction'][hop] = ans
+        if hop + 1 < len(self.data[id]['decomposition_instantiated']):
+          ph = '#{}'.format(hop + 1)
+          if ph in self.data[id]['decomposition_instantiated'][hop + 1]:
+            self.data[id]['decomposition_instantiated'][hop + 1] = \
+              self.data[id]['decomposition_instantiated'][hop + 1].replace(ph, ans.replace(' # ', ', '))
 
 
   def save(self, split: str, output: str):

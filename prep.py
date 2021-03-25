@@ -476,6 +476,38 @@ def convert_to_reducehop(source_file: str, target_file: str, out_source_file: st
         raise NotImplementedError
 
 
+def replace_hop(raw_source_file: str, raw_id_file: str, replace_source_file: str, new_source_file: str,
+                num_hop: int=2, replace_ind: int=1):
+  i2l = {}
+  with open(replace_source_file, 'r') as fin:
+    for i, l in enumerate(fin):
+      i2l[i] = l.rstrip('\n').split('\t')[0]
+  no_id_file = raw_id_file == raw_source_file
+  with open(raw_source_file, 'r') as sfin, open(raw_id_file, 'r') as ifin, open(new_source_file, 'w') as fout:
+    for i, l in enumerate(sfin):
+      l = l.rstrip('\n').split('\t')
+      if no_id_file:
+        id = i
+      else:
+        id = int(ifin.readline().strip())
+      if id % (num_hop + 1) == replace_ind:
+        l[0] = i2l[id]
+      fout.write('\t'.join(l) + '\n')
+
+
+def eval_json(filename: str):
+  domain2ems = defaultdict(list)
+  with open(filename, 'r') as fin:
+    data = json.load(fin)
+    for key, entry in data.items():
+      prediction = entry['decomposition_prediction'][-1]
+      answer = entry['decomposition_answer'][-1]
+      em = evaluation(prediction, answer, eval_mode='multi-multi')
+      domain2ems[entry['domain']].append(int(em))
+  for domain, ems in domain2ems.items():
+    print('{} {:.2f}'.format(domain, np.mean(ems) * 100))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -484,8 +516,8 @@ if __name__ == '__main__':
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
     'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter',
     'convert_unifiedqa_ol', 'break_unifiedqa_output', 'filter_hotpotqa',
-    'combine_split', 'combine_multi_targets',
-    'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq'], default='hotpotqa')
+    'combine_split', 'combine_multi_targets', 'replace_hop',
+    'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq', 'eval_json'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -495,6 +527,7 @@ if __name__ == '__main__':
   parser.add_argument('--thres', type=float, default=.0)
   parser.add_argument('--eval_mode', type=str, choices=['multi-multi', 'multi-single', 'single-single'], default='single-single')
   parser.add_argument('--no_context', action='store_true')
+  parser.add_argument('--gold_context', action='store_true')
   args = parser.parse_args()
 
   if args.task == 'eval':
@@ -509,42 +542,44 @@ if __name__ == '__main__':
         tfout.write('{}\n'.format(item['answer']))
 
   elif args.task == 'hotpotqa':
+    use_ph = True
     break_dataset = Break('../Break/break_dataset/QDMR-high-level')
     print(sorted(break_dataset.ops2count['hotpot'].items(), key=lambda x: -x[1]))
     hotpotqa = HoptopQA('../Break/break_dataset/QDMR-high-level/hotpotqa')
 
     with open(args.output, 'w') as fout, open(args.output + '.source', 'w') as sfout, open(args.output + '.target', 'w') as tfout:
-      for de in break_dataset.get_hotpotqa(hotpotqa, split=args.split):
-        fout.write(json.dumps(de) + '\n')
+      for de in break_dataset.get_hotpotqa(hotpotqa, split=args.split, use_ph=use_ph):
+        fout.write(str(de) + '\n')
         for sh in de.single_hops:
           if not args.no_context:  # use retrieval
             sfout.write('{}\t{}\t{}\n'.format(sh['q'], sh['c'][0], sh['c'][1]))
             tfout.write('{}\n'.format(sh['a']))
-          # no retrieval
-          sfout.write('{}\n'.format(sh['q']))
-          tfout.write('{}\n'.format(sh['a']))
+          if not args.gold_context:  # no retrieval
+            sfout.write('{}\n'.format(sh['q']))
+            tfout.write('{}\n'.format(sh['a']))
         mh = de.multi_hop
         if not args.no_context:
           # use all retrieval
           sfout.write('{}\t{}\t{}\n'.format(mh['q'], ' '.join([c[0] for c in mh['c']]), ' '.join([c[1] for c in mh['c']])))
           tfout.write('{}\n'.format(mh['a']))
-          # use one retrieval
-          sfout.write('{}\t{}\t{}\n'.format(mh['q'], mh['c'][0][0], mh['c'][0][1]))
+          if not args.gold_context:  # use one retrieval
+            sfout.write('{}\t{}\t{}\n'.format(mh['q'], mh['c'][0][0], mh['c'][0][1]))
+            tfout.write('{}\n'.format(mh['a']))
+            sfout.write('{}\t{}\t{}\n'.format(mh['q'], mh['c'][1][0], mh['c'][1][1]))
+            tfout.write('{}\n'.format(mh['a']))
+        if not args.gold_context:  # no retrieval
+          sfout.write('{}\n'.format(mh['q']))
           tfout.write('{}\n'.format(mh['a']))
-          sfout.write('{}\t{}\t{}\n'.format(mh['q'], mh['c'][1][0], mh['c'][1][1]))
-          tfout.write('{}\n'.format(mh['a']))
-        # use no retrieval
-        sfout.write('{}\n'.format(mh['q']))
-        tfout.write('{}\n'.format(mh['a']))
 
   elif args.task == 'cwq':
+    use_ph = True
     wq = WebQuestion('../Break/break_dataset/QDMR/webqsp')
     cwq = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq', webq=wq)
     with open(args.output + '.id', 'w') as ifout,\
       open(args.output + '.source', 'w') as sfout, \
       open(args.output + '.single.target', 'w') as stfout, \
       open(args.output + '.multi.target', 'w') as mtfout:
-      for de in cwq.decompose(split=args.split):
+      for de in cwq.decompose(split=args.split, use_ph=use_ph):
         for sh in de.single_hops:
           ifout.write(de.ind + '\n')
           sfout.write('{}\n'.format(sh['q']))
@@ -1259,3 +1294,14 @@ if __name__ == '__main__':
     tsv_file = args.input[0]
     outfile = args.output
     convert_to_reducehop_uq(tsv_file, outfile)
+
+  elif args.task == 'replace_hop':
+    replace_ind = 1
+    num_hop = 2
+    raw_source_file, raw_id_file, replace_source_file = args.input
+    new_source_file = raw_source_file + '.placeholder'
+    replace_hop(raw_source_file, raw_id_file, replace_source_file, new_source_file,
+                num_hop=num_hop, replace_ind=replace_ind)
+
+  elif args.task == 'eval_json':
+    eval_json(args.input[0])

@@ -72,7 +72,7 @@ class ComplexWebQuestion(object):
       return result
 
 
-  def decompose_composition(self, cwq: Dict, wq: Dict) -> MultihopQuestion:
+  def decompose_composition(self, cwq: Dict, wq: Dict, use_ph: bool=False) -> MultihopQuestion:
     sec_q = wq['question']
     sec_a = wq['answers']
     multi_q = cwq['question']
@@ -89,13 +89,16 @@ class ComplexWebQuestion(object):
       if sec_q[-i - 1] != cwq['machine_question'][-i - 1]:
         break
     end = len(cwq['machine_question']) - i
+    sec_q_ph = cwq['machine_question'][:start].strip() + ' #1 ' + cwq['machine_question'][end:].strip()
+    if use_ph:
+      sec_q = sec_q_ph
     fir_q = 'return ' + cwq['machine_question'][start:end].strip()
     fir_a = [[cwq['composition_answer']]]
     return MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
                             {'q': multi_q, 'a': multi_a}, ind=cwq['id'])
 
 
-  def decompose_conjunction(self, cwq: Dict, wq: Dict) -> MultihopQuestion:
+  def decompose_conjunction(self, cwq: Dict, wq: Dict, use_ph: bool=False) -> MultihopQuestion:
     fir_q = wq['question']
     fir_a = wq['answers']
     multi_q = cwq['question']
@@ -106,26 +109,29 @@ class ComplexWebQuestion(object):
     #for rem in ['is', 'was', 'are', 'were']:
     #  sec_q = sec_q.lstrip(rem).strip()
     #sec_q = 'return ' + sec_q + ' from ' + ', '.join(fir_a)
+    sec_q_ph = 'Which one of the following {}: #1?'.format(sec_q)
     sec_q = 'Which one of the following {}: {}?'.format(sec_q, MultihopQuestion.format_multi_answers_with_alias(fir_a, only_first_alias=True, ans_sep=', '))
+    if use_ph:
+      sec_q = sec_q_ph
     sec_q = sec_q.replace(' from after ', ' after ').replace(' from before ', ' before ')
     sec_a = cwq['answers']
     return MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
                             {'q': multi_q, 'a': multi_a}, ind=cwq['id'])
 
 
-  def decompose_superlative(self, cwq: Dict, wq: Dict) -> MultihopQuestion:
-    return self.decompose_conjunction(cwq, wq)
+  def decompose_superlative(self, cwq: Dict, wq: Dict, use_ph: bool=False) -> MultihopQuestion:
+    return self.decompose_conjunction(cwq, wq, use_ph=use_ph)
 
 
-  def decompose_comparative(self, cwq: Dict, wq: Dict) -> MultihopQuestion:
-    return self.decompose_conjunction(cwq, wq)
+  def decompose_comparative(self, cwq: Dict, wq: Dict, use_ph: bool=False) -> MultihopQuestion:
+    return self.decompose_conjunction(cwq, wq, use_ph=use_ph)
 
 
-  def decompose(self, split: str):
+  def decompose(self, split: str, use_ph: bool=False):
     if self.webq is None:
       raise Exception('load webquestion first')
     for k, v in getattr(self, split).items():
-      yield getattr(self, 'decompose_{}'.format(v['type']))(v, self.webq[v['webqsp_ID']])
+      yield getattr(self, 'decompose_{}'.format(v['type']))(v, self.webq[v['webqsp_ID']], use_ph=use_ph)
 
 
   def __getitem__(self, item: str):

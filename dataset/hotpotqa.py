@@ -28,7 +28,7 @@ class HoptopQA(object):
     return data
 
 
-  def decompose(self, id: str, split: str, break_entry: Dict[str, Any]) -> MultihopQuestion:
+  def decompose(self, id: str, split: str, break_entry: Dict[str, Any], use_ph: bool=False) -> MultihopQuestion:
     type = break_entry['operators']
     if type == 'select-project':
       if break_entry['decomposition'][1].startswith('return the name of'):
@@ -46,6 +46,8 @@ class HoptopQA(object):
       first, second = break_entry['decomposition']
       first_q, first_c, first_ans = first, (first_entity, entry['context'][first_entity][first_ind]), second_entity
       second_q, second_c, second_ans = second.replace('#1', second_entity), (second_entity, entry['context'][second_entity][second_ind]), entry['answer']
+      if use_ph:
+        second_q = second
       mh_q, mh_c, mh_ans = break_entry['question_text'], [first_c, second_c], answer
       return MultihopQuestion(
         single_hops=[{'q': first_q, 'c': first_c, 'a': first_ans}, {'q': second_q, 'c': second_c, 'a': second_ans}],
