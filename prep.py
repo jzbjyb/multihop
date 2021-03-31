@@ -495,17 +495,63 @@ def replace_hop(raw_source_file: str, raw_id_file: str, replace_source_file: str
       fout.write('\t'.join(l) + '\n')
 
 
-def eval_json(filename: str):
-  domain2ems = defaultdict(list)
+def eval_json(filename: str, domain_prediction_files: List[Tuple[str, str]]=None, num_hop: int=2, anas: List[str]=[], output: str=None):
+  domain2file = None
+  if domain_prediction_files:
+    domain2file = {d: open(p, 'r') for d, p in domain_prediction_files}
+  domain2ems = defaultdict(lambda: (list(), list()))
   with open(filename, 'r') as fin:
     data = json.load(fin)
     for key, entry in data.items():
-      prediction = entry['decomposition_prediction'][-1]
-      answer = entry['decomposition_answer'][-1]
-      em = evaluation(prediction, answer, eval_mode='multi-multi')
-      domain2ems[entry['domain']].append(int(em))
-  for domain, ems in domain2ems.items():
-    print('{} {:.2f}'.format(domain, np.mean(ems) * 100))
+      domain = entry['domain']
+      sh_q = entry['decomposition_instantiated'][0]
+      sh_pred = entry['decomposition_prediction'][0]
+      sh_ans = entry['decomposition_answer'][0]
+      sh_em = evaluation(sh_pred, sh_ans, eval_mode='multi-multi')
+      domain2ems[domain][0].append(int(sh_em))
+
+      mh_pred = entry['decomposition_prediction'][-1]
+      mh_ans = entry['decomposition_answer'][-1]
+      mh_em = evaluation(mh_pred, mh_ans, eval_mode='multi-multi')
+      domain2ems[domain][1].append(int(mh_em))
+
+      if domain2file is not None:
+        for i in range(num_hop + 1):
+          pred = domain2file[domain].readline().rstrip('\n').split('\t')[0]
+          if i == 0:
+            entry['decomposition_prediction_compare'] = []
+          if i != num_hop:  # single hop
+            entry['decomposition_prediction_compare'].append(pred)
+          else:
+            entry['prediction_compare'] = pred
+
+  for domain, (sh_ems, mh_ems) in domain2ems.items():
+    print('{}, single {:.2f}, multi {:.2f}, overall {:.2f}'.format(
+      domain, np.mean(sh_ems) * 100, np.mean(mh_ems) * 100, np.mean(sh_ems + mh_ems) * 100))
+
+  cases = []
+  for ana in anas:
+    for key, entry in data.items():
+      if ana == 'hop2_better':
+        pred = entry['decomposition_prediction'][-1]
+        ans = entry['decomposition_answer'][-1]
+        c_pred = entry['decomposition_prediction_compare'][-1]
+        em = evaluation(pred, ans, eval_mode='multi-multi')
+        c_em = evaluation(c_pred, ans, eval_mode='multi-multi')
+        if em and not c_em:
+          cases.append(entry)
+      elif ana == 'mh_better':
+        pred = entry['decomposition_prediction'][-1]
+        ans = entry['decomposition_answer'][-1]
+        c_pred = entry['prediction_compare']
+        em = evaluation(pred, ans, eval_mode='multi-multi')
+        c_em = evaluation(c_pred, ans, eval_mode='multi-multi')
+        if em and not c_em:
+          cases.append(entry)
+
+  if output:
+    with open(output, 'w') as fout:
+      json.dump(cases, fout, indent=2)
 
 
 if __name__ == '__main__':
@@ -706,9 +752,10 @@ if __name__ == '__main__':
         preds = []
         sources = []
         scores = []
-    print(len(ems_first_mh), len(ems_first_sh))
     print('em {:.2f}, only first {:.2f}, sh {:.2f}, mh {:.2f}'.format(
       np.mean(ems) * 100, np.mean(ems_first) * 100, np.mean(ems_first_sh) * 100, np.mean(ems_first_mh) * 100))
+    for nh in range(args.num_hops):
+      print('sh-{} {:.2f}'.format(nh, np.mean(ems_first_sh[nh:len(ems_first_sh):args.num_hops]) * 100))
     temps = numhops2temps[args.num_hops]
     groups = [dict(zip(temps, group)) for group in groups]
 
@@ -1304,4 +1351,8 @@ if __name__ == '__main__':
                 num_hop=num_hop, replace_ind=replace_ind)
 
   elif args.task == 'eval_json':
-    eval_json(args.input[0])
+    json_pred_file = args.input[0]
+    pred_files = args.input[1:]
+    domains = pred_files[0:len(pred_files):2]
+    pred_files = pred_files[1:len(pred_files):2]
+    eval_json(json_pred_file, list(zip(domains, pred_files)), anas=['mh_better'], output=args.output)
