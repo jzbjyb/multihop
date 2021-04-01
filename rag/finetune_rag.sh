@@ -10,7 +10,7 @@ export PYTHONPATH="../":"${PYTHONPATH}"
 # run ./examples/rag/finetune_rag.sh --help to see all the possible options
 
 DATA_DIR=$1  # /home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa/full_qa_small
-MODEL_NAME_OR_PATH=models/cwq_hotpotqa/rag_ssm/checkpoint10  # facebook/rag-sequence-nq
+MODEL_NAME_OR_PATH=facebook/rag-sequence-nq  # facebook/rag-sequence-nq
 max_combined_length=300
 max_target_length=25
 n_docs=1

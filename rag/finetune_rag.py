@@ -470,11 +470,13 @@ class GenerativeQAModule(BaseTransformer):
             )
 
         if self.consistency_loss == 'combine':
-            loss = outputs["loss"] + consist_loss
+            loss = outputs["loss"] + outputs2["loss"] + consist_loss
         elif self.consistency_loss == 'only':
             loss = consist_loss
         else:
             loss = outputs["loss"]
+            if 'input_ids2' in batch:
+                loss += outputs2["loss"]
 
         return (loss,)
 
