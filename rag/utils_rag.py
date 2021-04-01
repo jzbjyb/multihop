@@ -80,9 +80,18 @@ class Seq2SeqDataset(Dataset):
     def __getitem__(self, index) -> Dict[str, torch.Tensor]:
         index = index + 1  # linecache starts at 1
         source_line = self.prefix + linecache.getline(str(self.src_file), index).rstrip("\n")
+        source_line2 = None
         if '\t' in source_line:  # has context
-            q, title, text = source_line.split('\t')
-            source_line = title + self.title_sep + text + self.doc_sep + q
+            sp = source_line.split('\t')
+            if len(sp) == 3:  # one example
+                q, title, text = sp
+                source_line = title + self.title_sep + text + self.doc_sep + q
+            elif len(sp) == 4:  # two examples
+                q1, q2, title, text = sp
+                source_line = title + self.title_sep + text + self.doc_sep + q1
+                source_line2 = title + self.title_sep + text + self.doc_sep + q2
+            else:
+                raise NotImplementedError
         tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")
         assert source_line, f"empty source line for index {index}"
         assert tgt_line, f"empty tgt line for index {index}"
@@ -91,6 +100,8 @@ class Seq2SeqDataset(Dataset):
         if isinstance(self.tokenizer, T5Tokenizer):
             source_line += self.tokenizer.eos_token
             tgt_line += self.tokenizer.eos_token
+            if source_line2:
+                source_line2 += self.tokenizer.eos_token
 
         # Pad source and target to the right
         source_tokenizer = (
@@ -100,20 +111,36 @@ class Seq2SeqDataset(Dataset):
 
         source_inputs = encode_line(source_tokenizer, source_line, self.max_source_length, "right")
         source_inputs_for_decoder = encode_line(target_tokenizer, source_line, self.max_source_length, "right")
+        if source_line2:
+            source_inputs2 = encode_line(source_tokenizer, source_line2, self.max_source_length, "right")
+            source_inputs_for_decoder2 = encode_line(target_tokenizer, source_line2, self.max_source_length, "right")
         target_inputs = encode_line(target_tokenizer, tgt_line, self.max_target_length, "right")
 
         source_ids = source_inputs["input_ids"].squeeze()
         src_mask = source_inputs["attention_mask"].squeeze()
         source_ids_for_decoder = source_inputs_for_decoder["input_ids"].squeeze()
         src_mask_for_decoder = source_inputs_for_decoder["attention_mask"].squeeze()
+        if source_line2:
+            source_ids2 = source_inputs2["input_ids"].squeeze()
+            src_mask2 = source_inputs2["attention_mask"].squeeze()
+            source_ids_for_decoder2 = source_inputs_for_decoder2["input_ids"].squeeze()
+            src_mask_for_decoder2 = source_inputs_for_decoder2["attention_mask"].squeeze()
         target_ids = target_inputs["input_ids"].squeeze()
-        return {
+        example = {
             "input_ids": source_ids,
             "attention_mask": src_mask,
             "input_ids_for_decoder": source_ids_for_decoder,
             "attention_mask_for_decoder": src_mask_for_decoder,
             "decoder_input_ids": target_ids,
         }
+        if source_line2:
+            example.update({
+                "input_ids2": source_ids2,
+                "attention_mask2": src_mask2,
+                "input_ids_for_decoder2": source_ids_for_decoder2,
+                "attention_mask_for_decoder2": src_mask_for_decoder2
+            })
+        return example
 
     @staticmethod
     def get_char_lens(data_file):
@@ -124,6 +151,11 @@ class Seq2SeqDataset(Dataset):
         masks = torch.stack([x["attention_mask"] for x in batch])
         input_ids_for_decoder = torch.stack([x["input_ids_for_decoder"] for x in batch])
         masks_for_decoder = torch.stack([x["attention_mask_for_decoder"] for x in batch])
+        if 'input_ids2' in batch[0]:
+            input_ids2 = torch.stack([x["input_ids2"] for x in batch])
+            masks2 = torch.stack([x["attention_mask2"] for x in batch])
+            input_ids_for_decoder2 = torch.stack([x["input_ids_for_decoder2"] for x in batch])
+            masks_for_decoder2 = torch.stack([x["attention_mask_for_decoder2"] for x in batch])
         target_ids = torch.stack([x["decoder_input_ids"] for x in batch])
         tgt_pad_token_id = (
             self.tokenizer.generator.pad_token_id
@@ -138,14 +170,24 @@ class Seq2SeqDataset(Dataset):
         y = trim_batch(target_ids, tgt_pad_token_id)
         source_ids, source_mask = trim_batch(input_ids, src_pad_token_id, attention_mask=masks)
         source_ids_fd, source_mask_fd = trim_batch(input_ids_for_decoder, tgt_pad_token_id, attention_mask=masks_for_decoder)
-        batch = {
+        if 'input_ids2' in batch[0]:
+            source_ids2, source_mask2 = trim_batch(input_ids2, src_pad_token_id, attention_mask=masks2)
+            source_ids_fd2, source_mask_fd2 = trim_batch(input_ids_for_decoder2, tgt_pad_token_id, attention_mask=masks_for_decoder2)
+        result = {
             "input_ids": source_ids,
             "attention_mask": source_mask,
             "input_ids_for_decoder": source_ids_fd,
             "attention_mask_for_decoder": source_mask_fd,
             "decoder_input_ids": y,
         }
-        return batch
+        if 'input_ids2' in batch[0]:
+            result.update({
+                "input_ids2": source_ids2,
+                "attention_mask2": source_mask2,
+                "input_ids_for_decoder2": source_ids_fd2,
+                "attention_mask_for_decoder2": source_mask_fd2,
+            })
+        return result
 
 
 logger = getLogger(__name__)

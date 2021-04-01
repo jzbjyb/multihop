@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --mem=100000
 #SBATCH --time=0
-#SBATCH --gres=gpu:v100:1
+#SBATCH --gres=gpu:1
 
 server=tir
 
@@ -16,6 +16,8 @@ if [[ ${mode} == 'e2e' ]]; then
     ndocs=5
 elif [[ ${mode} == 'break' ]]; then
     ndocs=5
+elif [[ ${mode} == 'pseudo_break' ]]; then
+    ndocs=1
 elif [[ ${mode} == 'e2ec' ]]; then
     ndocs=1
 elif [[ ${mode} == 'retrieval_all' ]]; then
@@ -29,7 +31,8 @@ elif [[ ${server} == 'nanhang' ]]; then
     prefix="CUDA_VISIBLE_DEVICES=${gpu} proxychains4"
 fi
 
-${prefix} python eval_rag.py \
+#CUDA_VISIBLE_DEVICES=${gpu} proxychains4
+python eval_rag.py \
     --model_name_or_path ${model} \
     --model_type rag_sequence \
     --evaluation_set ${source} \

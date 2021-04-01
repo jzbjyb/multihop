@@ -554,6 +554,26 @@ def eval_json(filename: str, domain_prediction_files: List[Tuple[str, str]]=None
       json.dump(cases, fout, indent=2)
 
 
+def get_consistency_data(source_file, target_file, output_source_file, output_target_file, num_hop=2):
+  shs = []
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
+    open(output_source_file, 'w') as sfout, open(output_target_file, 'w') as tfout:
+    for i, l in enumerate(sfin):
+      source = l.strip()
+      target = tfin.readline().strip()
+      if i % (num_hop + 1) == num_hop:  # multihop
+        mhq = source.split('\t')
+        context = mhq[1:]
+        mhq = mhq[0]
+        shs = [sh + ('' if sh[-1] in {'.', '?'} else '.') for sh in shs]
+        shq = ' '.join(shs)
+        sfout.write('{}\t{}\t{}\t{}\n'.format(mhq, shq, *context))
+        tfout.write(target + '\n')
+        shs = []
+      else:
+        shs.append(source.split('\t')[0])
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -563,7 +583,8 @@ if __name__ == '__main__':
     'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter',
     'convert_unifiedqa_ol', 'break_unifiedqa_output', 'filter_hotpotqa',
     'combine_split', 'combine_multi_targets', 'replace_hop',
-    'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq', 'eval_json'], default='hotpotqa')
+    'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq',
+    'eval_json', 'consistency_data'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1263,6 +1284,8 @@ if __name__ == '__main__':
       for l in fin:
         t = join_sep.join([a.split(alias_sep)[0] for a in l.strip().split(ans_sep)])
         fout.write(t + '\n')
+    os.remove(target_file)
+    os.rename(target_file + '.new', target_file)
 
   elif args.task == 'find_target':
     source_file, id_file, target_file, type_file = args.input
@@ -1356,3 +1379,8 @@ if __name__ == '__main__':
     domains = pred_files[0:len(pred_files):2]
     pred_files = pred_files[1:len(pred_files):2]
     eval_json(json_pred_file, list(zip(domains, pred_files)), anas=['mh_better'], output=args.output)
+
+  elif args.task == 'consistency_data':
+    source_file, target_file = args.input
+    output_source_file, output_target_file = source_file + '.consist', target_file + '.consist'
+    get_consistency_data(source_file, target_file, output_source_file, output_target_file)

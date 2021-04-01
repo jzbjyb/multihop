@@ -131,6 +131,7 @@ class GenerativeQAModule(BaseTransformer):
         self.use_mdr = hparams.use_mdr
         self.fix_retriever = hparams.fix_retriever
         self.fix_generator = hparams.fix_generator
+        self.consistency_loss = hparams.consistency_loss
 
         config_class = RagConfig if self.is_rag_model else AutoConfig
         config = config_class.from_pretrained(hparams.model_name_or_path)
@@ -382,6 +383,21 @@ class GenerativeQAModule(BaseTransformer):
             )
         return (loss,)
 
+    def compute_consistency_loss(self, logits1, logits2, target):
+        pad_token_id = self.model.config.generator.pad_token_id
+        p1 = F.softmax(logits1, -1)
+        p2 = F.softmax(logits2, -1)
+        log_avg_dist = torch.log(torch.clamp(p1 / 2 + p2 / 2, min=1e-10))
+        kl1 = F.kl_div(log_avg_dist, p1, reduction='none', log_target=False).sum(-1)
+        kl2 = F.kl_div(log_avg_dist, p2, reduction='none', log_target=False).sum(-1)
+        jsd = kl1 / 2 + kl2 / 2
+        target = torch.cat([target[:, 1:], target.new(target.shape[0], 1).fill_(pad_token_id)], 1)
+        pad_mask = target.eq(pad_token_id)
+        if pad_mask.any():
+            jsd.masked_fill_(pad_mask, 0.0)
+        loss = jsd.sum()
+        return loss
+
     def _step(self, batch: dict, use_retrieval: bool=True) -> Tuple:
         if use_retrieval:
             return self._multihop_step(batch=batch, num_hop=self.retrieval_hop)
@@ -416,6 +432,7 @@ class GenerativeQAModule(BaseTransformer):
 
         assert decoder_input_ids is not None
 
+        consist_loss = 0
         if self.is_rag_model and not use_retrieval:
             outputs = self(
                 context_input_ids=source_ids_fd,
@@ -427,6 +444,21 @@ class GenerativeQAModule(BaseTransformer):
                 n_docs=1,
                 **rag_kwargs,
             )
+            if 'input_ids2' in batch:
+                source_ids2, source_mask2 = batch["input_ids2"], batch["attention_mask2"]
+                source_ids_fd2, source_mask_fd2 = batch["input_ids_for_decoder2"], batch["attention_mask_for_decoder2"]
+                outputs2 = self(
+                    context_input_ids=source_ids_fd2,
+                    context_attention_mask=source_mask_fd2,
+                    doc_scores=source_ids2.new_zeros(source_ids2.size(0), 1).float(),
+                    decoder_input_ids=decoder_input_ids,
+                    use_cache=False,
+                    labels=lm_labels,
+                    n_docs=1,
+                    **rag_kwargs,
+                )
+                if self.consistency_loss != 'no':
+                    consist_loss = self.compute_consistency_loss(outputs['logits'], outputs2['logits'], decoder_input_ids)
         else:
             outputs = self(
                 source_ids,
@@ -437,7 +469,13 @@ class GenerativeQAModule(BaseTransformer):
                 **rag_kwargs,
             )
 
-        loss = outputs["loss"]
+        if self.consistency_loss == 'combine':
+            loss = outputs["loss"] + consist_loss
+        elif self.consistency_loss == 'only':
+            loss = consist_loss
+        else:
+            loss = outputs["loss"]
+
         return (loss,)
 
     @property
@@ -721,6 +759,7 @@ class GenerativeQAModule(BaseTransformer):
         parser.add_argument('--use_mdr', action='store_true')
         parser.add_argument('--fix_retriever', action='store_true')
         parser.add_argument('--fix_generator', action='store_true')
+        parser.add_argument('--consistency_loss', type=str, choices=['no', 'combine', 'only'], default='no')
         return parser
 
     @staticmethod
