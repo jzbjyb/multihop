@@ -24,7 +24,8 @@ eval_stat = {
 
 numhops2temps: Dict[int, List[str]] = {
   #2: ['n-*', 'p-*', '*-n', '*-p', 'n-n', 'n-p', 'p-n', 'p-p']
-  2: ['n-*', '*-n', 'n-n']
+  #2: ['n-*', '*-n', 'n-n']
+  2: ['n-*', '*-n', 'n-n', '*', '*']
 }
 i2ph = {0: 'XXX', 1: 'YYY', 2: 'ZZZ', 3: 'AAA', 4: 'BBB', 5: 'CCC', 6: 'DDD', 7: 'EEE', 8: 'FFF', 9: 'GGG', 10: 'HHH'}
 
@@ -761,7 +762,7 @@ if __name__ == '__main__':
           print(stat)
 
     pred_file, source_file, target_file, add_file = args.input[:4]
-    score_file = args.input[4] if len(args.input) > 4 else add_file
+    score_file = args.input[4] if len(args.input) > 4 else source_file
     ems = []
     ems_first = []
     ems_first_sh = []
@@ -789,15 +790,17 @@ if __name__ == '__main__':
         pred = l.rstrip('\n').split('\t')[0]
         source = sfin.readline().strip()
         score = scorefin.readline().strip().split('\t')
-        preds.append(pred)
-        sources.append(source)
-        scores.append((float(score[0]), float(score[1])) if len(score) == 2 else (0, 0))
         if i % args.num_para == args.num_para - 1:
           pass
         else:
           continue
         targets = tfin.readline().rstrip('\n')
+        if (i // args.num_para) % len(numhops2temps[args.num_hops]) >= args.num_hops + 1:
+          continue
         addition = afin.readline().rstrip('\n')
+        preds.append(pred)
+        sources.append(source)
+        scores.append((float(score[0]), float(score[1])) if len(score) == 2 else (0, 0))
         em_li = [evaluation(pred, targets, eval_mode=args.eval_mode) for pred in preds]
         em = max(em_li)
         ems.append(em)
@@ -811,7 +814,7 @@ if __name__ == '__main__':
             cates.append(addtion_res(addition))
           else:
             cates.append('')
-        if ((i // args.num_para) + 1) % len(numhops2temps[args.num_hops]) == 0:  # multihop
+        if ((i // args.num_para) + 1) % len(numhops2temps[args.num_hops]) == args.num_hops + 1:  # multihop
           ems_first_mh.append(em_li[0])
         else:
           ems_first_sh.append(em_li[0])
