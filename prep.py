@@ -24,8 +24,9 @@ eval_stat = {
 
 numhops2temps: Dict[int, List[str]] = {
   #2: ['n-*', 'p-*', '*-n', '*-p', 'n-n', 'n-p', 'p-n', 'p-p']
-  #2: ['n-*', '*-n', 'n-n']
-  2: ['n-*', '*-n', 'n-n', '*', '*']
+  2: ['n-*', '*-n', 'n-n']
+  #2: ['n-*', '*-n', 'n-n', '*', '*']
+  #2: ['n-*', '*-n', 'n-n', '*']
 }
 i2ph = {0: 'XXX', 1: 'YYY', 2: 'ZZZ', 3: 'AAA', 4: 'BBB', 5: 'CCC', 6: 'DDD', 7: 'EEE', 8: 'FFF', 9: 'GGG', 10: 'HHH'}
 
@@ -42,8 +43,12 @@ def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pre
       eval_stat['multi-predictions'][-1] += 1
     if len(predictions) != len(targets):
       return False
-    for pred, tar in zip(predictions, targets):
-      score = np.max([exact_match_score(pred, t) for t in tar])
+    for tar in targets:  # match each target with all predictions
+      score = False
+      for pred in predictions:
+        score = np.max([exact_match_score(pred, t) for t in tar]) or score
+        if score:
+          break
       if not score:
         return False
     if len(targets) > 1:
@@ -767,6 +772,7 @@ if __name__ == '__main__':
     ems_first = []
     ems_first_sh = []
     ems_first_mh = []
+    ems_first_add = []
     groups = []
     cases = []
     cates = []
@@ -796,8 +802,9 @@ if __name__ == '__main__':
           continue
         targets = tfin.readline().rstrip('\n')
         if (i // args.num_para) % len(numhops2temps[args.num_hops]) >= args.num_hops + 1:
-          continue
-        addition = afin.readline().rstrip('\n')
+          pass  # use previous addition
+        else:
+          addition = afin.readline().rstrip('\n')
         preds.append(pred)
         sources.append(source)
         scores.append((float(score[0]), float(score[1])) if len(score) == 2 else (0, 0))
@@ -814,10 +821,12 @@ if __name__ == '__main__':
             cates.append(addtion_res(addition))
           else:
             cates.append('')
-        if ((i // args.num_para) + 1) % len(numhops2temps[args.num_hops]) == args.num_hops + 1:  # multihop
+        if (i // args.num_para) % len(numhops2temps[args.num_hops]) == args.num_hops:  # multihop
           ems_first_mh.append(em_li[0])
-        else:
+        elif (i // args.num_para) % len(numhops2temps[args.num_hops]) < args.num_hops:  # singlehop
           ems_first_sh.append(em_li[0])
+        elif (i // args.num_para) % len(numhops2temps[args.num_hops]) == len(numhops2temps[args.num_hops]) - 1:  # concat singlehop
+          ems_first_add.append(em_li[0])
         groups[-1].append(em)
         if numhops2temps[args.num_hops][i % len(numhops2temps[args.num_hops])] in {'n-*', '*-n', 'n-n'}:
           scores[0] = (0, 0)
@@ -830,8 +839,9 @@ if __name__ == '__main__':
         preds = []
         sources = []
         scores = []
-    print('em {:.2f}, only first {:.2f}, sh {:.2f}, mh {:.2f}'.format(
-      np.mean(ems) * 100, np.mean(ems_first) * 100, np.mean(ems_first_sh) * 100, np.mean(ems_first_mh) * 100))
+    print('em {:.2f}, only first {:.2f}, sh {:.2f}, mh {:.2f}, additional: {:.2f}'.format(
+      np.mean(ems) * 100, np.mean(ems_first_sh + ems_first_mh) * 100, np.mean(ems_first_sh) * 100,
+      np.mean(ems_first_mh) * 100, np.mean(ems_first_add) * 100))
     for nh in range(args.num_hops):
       print('sh-{} {:.2f}'.format(nh, np.mean(ems_first_sh[nh:len(ems_first_sh):args.num_hops]) * 100))
     temps = numhops2temps[args.num_hops]
