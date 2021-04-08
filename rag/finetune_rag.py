@@ -132,6 +132,7 @@ class GenerativeQAModule(BaseTransformer):
         self.fix_retriever = hparams.fix_retriever
         self.fix_generator = hparams.fix_generator
         self.consistency_loss = hparams.consistency_loss
+        self.distance = hparams.distance
 
         config_class = RagConfig if self.is_rag_model else AutoConfig
         config = config_class.from_pretrained(hparams.model_name_or_path)
@@ -390,17 +391,27 @@ class GenerativeQAModule(BaseTransformer):
 
     def compute_consistency_loss(self, logits1, logits2, target, use_consist):
         pad_token_id = self.model.config.generator.pad_token_id
-        p1 = F.softmax(logits1, -1)
-        p2 = F.softmax(logits2, -1)
-        log_avg_dist = torch.log(torch.clamp(p1 / 2 + p2 / 2, min=1e-10))
-        kl1 = F.kl_div(log_avg_dist, p1, reduction='none', log_target=False).sum(-1)
-        kl2 = F.kl_div(log_avg_dist, p2, reduction='none', log_target=False).sum(-1)
-        jsd = kl1 / 2 + kl2 / 2
         target = torch.cat([target[:, 1:], target.new(target.shape[0], 1).fill_(pad_token_id)], 1)
         pad_mask = target.eq(pad_token_id)
-        if pad_mask.any():
-            jsd.masked_fill_(pad_mask, 0.0)
-        loss = jsd.sum(-1)
+        if self.distance == 'jsd':
+            p1 = F.softmax(logits1, -1)
+            p2 = F.softmax(logits2, -1)
+            log_avg_dist = torch.log(torch.clamp(p1 / 2 + p2 / 2, min=1e-10))
+            kl1 = F.kl_div(log_avg_dist, p1, reduction='none', log_target=False).sum(-1)
+            kl2 = F.kl_div(log_avg_dist, p2, reduction='none', log_target=False).sum(-1)
+            jsd = kl1 / 2 + kl2 / 2
+            if pad_mask.any():
+                jsd.masked_fill_(pad_mask, 0.0)
+            loss = jsd.sum(-1)
+        elif self.distance == 'kl':
+            p2 = F.softmax(logits2, -1)
+            lp1 = F.log_softmax(logits1, -1)
+            kl = F.kl_div(lp1, p2, reduction='none', log_target=False).sum(-1)
+            if pad_mask.any():
+                kl.masked_fill_(pad_mask, 0.0)
+            loss = kl.sum(-1)
+        else:
+            raise NotImplementedError
         loss = (loss * use_consist.float()).sum()
         return loss
 
@@ -772,6 +783,7 @@ class GenerativeQAModule(BaseTransformer):
         parser.add_argument('--fix_retriever', action='store_true')
         parser.add_argument('--fix_generator', action='store_true')
         parser.add_argument('--consistency_loss', type=str, choices=['no', 'combine', 'only'], default='no')
+        parser.add_argument('--distance', type=str, choices=['jsd', 'kl'], default='jsd')
         return parser
 
     @staticmethod
