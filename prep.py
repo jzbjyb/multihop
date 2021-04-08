@@ -20,6 +20,9 @@ eval_stat = {
   'single': [0, 0],
   'multi-predictions': [0, 0],
 }
+join_sep = ' # '
+alias_sep = '\t'
+ans_sep = '\t\t'
 
 
 numhops2temps: Dict[int, List[str]] = {
@@ -501,6 +504,25 @@ def replace_hop(raw_source_file: str, raw_id_file: str, replace_source_file: str
       fout.write('\t'.join(l) + '\n')
 
 
+def ana_reducehop(json_file, raw_pred_file):
+  count = 0
+  with open(json_file, 'r') as fin, open(raw_pred_file, 'r') as rfin:
+    data = json.load(fin)
+    for k, v in data.items():
+      if not k.startswith('complexwebq'):
+        continue
+      p1 = rfin.readline().strip().split('\t')[0]
+      p2 = rfin.readline().strip().split('\t')[0]
+      pm = rfin.readline().strip().split('\t')[0]
+      rep2 = v['decomposition_prediction'][-1]
+      t2 = v['decomposition_answer'][-1]
+      p2_em = evaluation(p2, t2, eval_mode='multi-multi')
+      rep2_em = evaluation(rep2, t2, eval_mode='multi-multi')
+      if rep2_em and not p2_em:
+        count += 1
+    print(count)
+
+
 def eval_json(filename: str, domain_prediction_files: List[Tuple[str, str]]=None, num_hop: int=2, anas: List[str]=[], output: str=None):
   domain2file = None
   if domain_prediction_files:
@@ -580,6 +602,25 @@ def get_consistency_data(source_file, target_file, output_source_file, output_ta
         shs.append(source.split('\t')[0])
 
 
+def get_2hop_consistency_data(source_file, target_file, output_source_file, output_target_file, num_hop=2):
+  shs = []
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
+    open(output_source_file, 'w') as sfout, open(output_target_file, 'w') as tfout:
+    for i, l in enumerate(sfin):
+      source = l.strip()
+      target = tfin.readline().strip()
+      if i % (num_hop + 1) == num_hop:  # multihop
+        mhq = source.split('\t')
+        context = mhq[1:]
+        mhq = mhq[0]
+        shq = shs[-1]
+        sfout.write('{}\t{}\t{}\t{}\n'.format(mhq, shq, *context))
+        tfout.write(target + '\n')
+        shs = []
+      else:
+        shs.append(source.split('\t')[0])
+
+
 def get_explicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file, num_hop=2):
   shs = []
   with open(source_file, 'r') as sfin, open(raw_source_file, 'r') as rsfin, open(target_file, 'r') as tfin, \
@@ -634,6 +675,41 @@ def get_implicit_data(source_file, target_file, output_source_file, output_targe
         tfout.write(target + '\n')
 
 
+def gen_multi_2hop(source_file, target_file, pred_file, out_source_file, out_target_file, raw_count: int=1, out_count: int=1, num_hop: int=2):
+    dup_count = 0
+    def dedup(preds: List[Tuple[str, str]]):
+      nonlocal dup_count
+      has = set()
+      no_dup = []
+      dup = []
+      for pred, score in preds:
+        if pred not in has:
+          no_dup.append((pred, score))
+          has.add(pred)
+        else:
+          dup.append((pred, score))
+      result = (no_dup + dup)[:out_count]
+      dup_count += int(len(no_dup) < out_count)
+      assert len(result) == out_count
+      return result
+    with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(pred_file, 'r') as pfin, \
+      open(out_source_file, 'w') as sfout, open(out_target_file, 'w') as tfout:
+      preds = []
+      for i, l in enumerate(pfin):
+        preds.append(l.strip().split('\t'))
+        if i % raw_count == raw_count - 1:
+          source = sfin.readline().strip()
+          target = tfin.readline().strip()
+          if (i // raw_count) % (num_hop + 1) == 1:  # 2hop
+            preds = dedup(preds[-raw_count * 2:-raw_count])
+            q, title, body = source.split('\t')
+            for pred, score in preds:
+              sfout.write('{}\t{}\t{}\t{}\n'.format(q.replace('#1', pred.replace(join_sep, ', ')), title, body, score))
+            tfout.write(target + '\n')
+            preds = []
+    print('{} has dups'.format(dup_count))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -644,7 +720,8 @@ if __name__ == '__main__':
     'convert_unifiedqa_ol', 'break_unifiedqa_output', 'filter_hotpotqa',
     'combine_split', 'combine_multi_targets', 'replace_hop',
     'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq',
-    'eval_json', 'consistency_data', 'explicit_data', 'implicit_data'], default='hotpotqa')
+    'eval_json', 'consistency_data', 'explicit_data', 'implicit_data',
+    '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -794,18 +871,18 @@ if __name__ == '__main__':
       scores = []
       for i, l in enumerate(pfin):
         pred = l.rstrip('\n').split('\t')[0]
-        source = sfin.readline().strip()
-        score = scorefin.readline().strip().split('\t')
+        preds.append(pred)
         if i % args.num_para == args.num_para - 1:
           pass
         else:
           continue
+        source = sfin.readline().strip()
+        score = scorefin.readline().strip().split('\t')
         targets = tfin.readline().rstrip('\n')
         if (i // args.num_para) % len(numhops2temps[args.num_hops]) >= args.num_hops + 1:
           pass  # use previous addition
         else:
           addition = afin.readline().rstrip('\n')
-        preds.append(pred)
         sources.append(source)
         scores.append((float(score[0]), float(score[1])) if len(score) == 2 else (0, 0))
         em_li = [evaluation(pred, targets, eval_mode=args.eval_mode) for pred in preds]
@@ -822,11 +899,11 @@ if __name__ == '__main__':
           else:
             cates.append('')
         if (i // args.num_para) % len(numhops2temps[args.num_hops]) == args.num_hops:  # multihop
-          ems_first_mh.append(em_li[0])
+          ems_first_mh.append(em)
         elif (i // args.num_para) % len(numhops2temps[args.num_hops]) < args.num_hops:  # singlehop
-          ems_first_sh.append(em_li[0])
+          ems_first_sh.append(em)
         elif (i // args.num_para) % len(numhops2temps[args.num_hops]) == len(numhops2temps[args.num_hops]) - 1:  # concat singlehop
-          ems_first_add.append(em_li[0])
+          ems_first_add.append(em)
         groups[-1].append(em)
         if numhops2temps[args.num_hops][i % len(numhops2temps[args.num_hops])] in {'n-*', '*-n', 'n-n'}:
           scores[0] = (0, 0)
@@ -891,7 +968,6 @@ if __name__ == '__main__':
             for s, t, p, e, scores in c:
               s = '<br>'.join(['{} ({:.2f}, {:.2f})'.format(_s.split('\t')[0], score[0], score[1]) for _s, score in zip(s, scores)])
               p = '&nbsp;&nbsp;&nbsp;'.join('{} ({})'.format(_p, _e) for _p, _e in zip(p, e))
-              t = '&nbsp;&nbsp;&nbsp;'.join(t)
               fout.write('<div><div>Q: {}</div>\n<div style="padding-left: 80px;">G: {}</div>\n<div style="padding-left: 80px;">P: {}</div></div>'.format(s, t, p))
           if args.num_para > 1:
             fout.write('<h3>cases improved by paraphrases</h3>\n')
@@ -908,7 +984,6 @@ if __name__ == '__main__':
               for s, t, p, e, scores in c:
                 s = '<br>'.join(['{} ({:.2f}, {:.2f})'.format(_s.split('\t')[0], score[0], score[1]) for _s, score in zip(s, scores)])
                 p = '&nbsp;&nbsp;&nbsp;'.join('{} ({})'.format(_p, _e) for _p, _e in zip(p, e))
-                t = '&nbsp;&nbsp;&nbsp;'.join(t)
                 fout.write('<div><div>Q: {}</div>\n<div style="padding-left: 80px;">G: {}</div>\n<div style="padding-left: 80px;">P: {}</div></div>'.format(s, t, p))
               if use_count >= 5:
                 break
@@ -1343,9 +1418,6 @@ if __name__ == '__main__':
     combine_split(source_files, target_files, output_dir, split=args.split, num_hop=2)
 
   elif args.task == 'combine_multi_targets':
-    join_sep = ' # '
-    alias_sep = '\t'
-    ans_sep = '\t\t'
     target_file = args.input[0]
     with open(target_file, 'r') as fin, open(target_file + '.new', 'w') as fout:
       for l in fin:
@@ -1452,6 +1524,11 @@ if __name__ == '__main__':
     output_source_file, output_target_file = source_file + '.consist', target_file + '.consist'
     get_consistency_data(source_file, target_file, output_source_file, output_target_file)
 
+  elif args.task == '2hop_consistency_data':
+    source_file, target_file = args.input
+    output_source_file, output_target_file = source_file + '.2hopconsist', target_file + '.2hopconsist'
+    get_2hop_consistency_data(source_file, target_file, output_source_file, output_target_file)
+
   elif args.task == 'explicit_data':
     source_file, target_file, raw_source_file = args.input
     output_source_file, output_target_file = source_file + '.explicit', target_file + '.explicit'
@@ -1461,3 +1538,14 @@ if __name__ == '__main__':
     source_file, target_file, raw_source_file = args.input
     output_source_file, output_target_file = source_file + '.implicit', target_file + '.implicit'
     get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file)
+
+  elif args.task == 'gen_multi_2hop':
+    count = 10
+    source_file, target_file, pred_file = args.input
+    out_source_file = source_file + '.{}_2hop'.format(count)
+    out_target_file = target_file + '.{}_2hop'.format(count)
+    gen_multi_2hop(source_file, target_file, pred_file, out_source_file, out_target_file, raw_count=50, out_count=count)
+
+  elif args.task == 'ana_reducehop':
+    json_file, raw_pred_file = args.input
+    ana_reducehop(json_file, raw_pred_file)
