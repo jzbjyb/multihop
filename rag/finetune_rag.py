@@ -147,6 +147,7 @@ class GenerativeQAModule(BaseTransformer):
 
         # set extra_model_params for generator configs and load_model
         extra_model_params = ("encoder_layerdrop", "decoder_layerdrop", "attention_dropout", "dropout")
+        model2 = None
         if self.is_rag_model:
             if hparams.prefix is not None:
                 config.generator.prefix = hparams.prefix
@@ -172,6 +173,9 @@ class GenerativeQAModule(BaseTransformer):
                 )
             retriever.config.max_combined_length = hparams.max_combined_length  # need to be smaller for multihop training
             model = self.model_class.from_pretrained(hparams.model_name_or_path, config=config, retriever=retriever)
+            if hparams.model_name_or_path2:
+                print('---> load model2 {}'.format(hparams.model_name_or_path2))
+                model2 = self.model_class.from_pretrained(hparams.model_name_or_path2, config=config, retriever=retriever)
             if self.use_mdr:
                 # load question encoder from MDR
                 if hparams.model_name_or_path.startswith('facebook'):  # official model
@@ -204,6 +208,7 @@ class GenerativeQAModule(BaseTransformer):
             )
 
         super().__init__(hparams, config=config, tokenizer=tokenizer, model=model)
+        self.model2 = model2
 
         #save_git_info(self.hparams.output_dir)  # TODO: debug
         self.output_dir = Path(self.hparams.output_dir)
@@ -383,7 +388,7 @@ class GenerativeQAModule(BaseTransformer):
             )
         return (loss,)
 
-    def compute_consistency_loss(self, logits1, logits2, target):
+    def compute_consistency_loss(self, logits1, logits2, target, use_consist):
         pad_token_id = self.model.config.generator.pad_token_id
         p1 = F.softmax(logits1, -1)
         p2 = F.softmax(logits2, -1)
@@ -395,7 +400,8 @@ class GenerativeQAModule(BaseTransformer):
         pad_mask = target.eq(pad_token_id)
         if pad_mask.any():
             jsd.masked_fill_(pad_mask, 0.0)
-        loss = jsd.sum()
+        loss = jsd.sum(-1)
+        loss = (loss * use_consist.float()).sum()
         return loss
 
     def _step(self, batch: dict, use_retrieval: bool=True) -> Tuple:
@@ -447,7 +453,12 @@ class GenerativeQAModule(BaseTransformer):
             if 'input_ids2' in batch:
                 source_ids2, source_mask2 = batch["input_ids2"], batch["attention_mask2"]
                 source_ids_fd2, source_mask_fd2 = batch["input_ids_for_decoder2"], batch["attention_mask_for_decoder2"]
-                outputs2 = self(
+                if self.model2 is not None:
+                    fw_func = self.model2
+                else:
+                    fw_func = self.model
+                outputs2 = fw_func(
+                    input_ids=None,
                     context_input_ids=source_ids_fd2,
                     context_attention_mask=source_mask_fd2,
                     doc_scores=source_ids2.new_zeros(source_ids2.size(0), 1).float(),
@@ -458,7 +469,8 @@ class GenerativeQAModule(BaseTransformer):
                     **rag_kwargs,
                 )
                 if self.consistency_loss != 'no':
-                    consist_loss = self.compute_consistency_loss(outputs['logits'], outputs2['logits'], decoder_input_ids)
+                    consist_loss = self.compute_consistency_loss(
+                        outputs['logits'], outputs2['logits'].detach(), decoder_input_ids, batch['use_consist'])
         else:
             outputs = self(
                 source_ids,
@@ -470,13 +482,11 @@ class GenerativeQAModule(BaseTransformer):
             )
 
         if self.consistency_loss == 'combine':
-            loss = outputs["loss"] + outputs2["loss"] + consist_loss
+            loss = outputs["loss"] + consist_loss
         elif self.consistency_loss == 'only':
             loss = consist_loss
         else:
             loss = outputs["loss"]
-            if 'input_ids2' in batch:
-                loss += outputs2["loss"]
 
         return (loss,)
 

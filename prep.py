@@ -649,8 +649,9 @@ def get_explicit_data(source_file, target_file, output_source_file, output_targe
         tfout.write(target + '\n')
 
 
-def get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file, num_hop=2):
+def get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file, num_hop=2, with_consist: str=None):
   shs = []
+  raw_shs = []
   with open(source_file, 'r') as sfin, open(raw_source_file, 'r') as rsfin, open(target_file, 'r') as tfin, \
     open(output_source_file, 'w') as sfout, open(output_target_file, 'w') as tfout:
     for i, l in enumerate(sfin):
@@ -662,16 +663,31 @@ def get_implicit_data(source_file, target_file, output_source_file, output_targe
         mhq = sp[0]
         shs = [sh + ('' if sh[-1] in {'.', '?'} else '.') for sh in shs]
         shq = ' '.join(shs)
-        sfout.write('{}\t{}\t{}\n'.format(mhq, sp[1], sp[2]))
+        if with_consist:
+          if with_consist == 'explicit':
+            sh2 = 'Answer the following question: ' + raw_shs[-1]
+          elif with_consist == 'normal':
+            sh2 = raw_shs[-1]
+          else:
+            raise NotImplementedError
+          sfout.write('{}\t{}\t{}\t{}\n'.format(mhq, sh2, sp[1], sp[2]))
+          sfout.write('{}\t{}\t{}\t{}\n'.format(shq, '#', sp[1], sp[2]))
+        else:
+          sfout.write('{}\t{}\t{}\n'.format(mhq, sp[1], sp[2]))
+          sfout.write('{}\t{}\t{}\n'.format(shq, sp[1], sp[2]))
         tfout.write(target + '\n')
-        sfout.write('{}\t{}\t{}\n'.format(shq, sp[1], sp[2]))
         tfout.write(target + '\n')
         shs = []
+        raw_shs = []
       else:  # single hop
         sp = source.split('\t')
         shs.append(sp[0])
         raw_sh = raw_source.split('\t')[0]
-        sfout.write('{}\t{}\t{}\n'.format(raw_sh, sp[1], sp[2]))
+        raw_shs.append(raw_sh)
+        if with_consist:
+          sfout.write('{}\t{}\t{}\t{}\n'.format(raw_sh, '#', sp[1], sp[2]))
+        else:
+          sfout.write('{}\t{}\t{}\n'.format(raw_sh, sp[1], sp[2]))
         tfout.write(target + '\n')
 
 
@@ -721,6 +737,7 @@ if __name__ == '__main__':
     'combine_split', 'combine_multi_targets', 'replace_hop',
     'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq',
     'eval_json', 'consistency_data', 'explicit_data', 'implicit_data',
+    'implicit_data_with_explicit', 'implicit_data_with_normal',
     '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
@@ -1538,6 +1555,16 @@ if __name__ == '__main__':
     source_file, target_file, raw_source_file = args.input
     output_source_file, output_target_file = source_file + '.implicit', target_file + '.implicit'
     get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file)
+
+  elif args.task == 'implicit_data_with_explicit':
+    source_file, target_file, raw_source_file = args.input
+    output_source_file, output_target_file = source_file + '.implicit2explicit', target_file + '.implicit2explicit'
+    get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file, with_consist='explicit')
+
+  elif args.task == 'implicit_data_with_normal':
+    source_file, target_file, raw_source_file = args.input
+    output_source_file, output_target_file = source_file + '.implicit2normal', target_file + '.implicit2normal'
+    get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file, with_consist='normal')
 
   elif args.task == 'gen_multi_2hop':
     count = 10

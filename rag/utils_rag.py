@@ -81,6 +81,7 @@ class Seq2SeqDataset(Dataset):
         index = index + 1  # linecache starts at 1
         source_line = self.prefix + linecache.getline(str(self.src_file), index).rstrip("\n")
         source_line2 = None
+        use_consist = False
         if '\t' in source_line:  # has context
             sp = source_line.split('\t')
             if len(sp) == 3:  # one example
@@ -90,6 +91,8 @@ class Seq2SeqDataset(Dataset):
                 q1, q2, title, text = sp
                 source_line = title + self.title_sep + text + self.doc_sep + q1
                 source_line2 = title + self.title_sep + text + self.doc_sep + q2
+                if q2 != '#':
+                    use_consist = True
             else:
                 raise NotImplementedError
         tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")
@@ -138,7 +141,8 @@ class Seq2SeqDataset(Dataset):
                 "input_ids2": source_ids2,
                 "attention_mask2": src_mask2,
                 "input_ids_for_decoder2": source_ids_for_decoder2,
-                "attention_mask_for_decoder2": src_mask_for_decoder2
+                "attention_mask_for_decoder2": src_mask_for_decoder2,
+                "use_consist": int(use_consist)
             })
         return example
 
@@ -156,6 +160,7 @@ class Seq2SeqDataset(Dataset):
             masks2 = torch.stack([x["attention_mask2"] for x in batch])
             input_ids_for_decoder2 = torch.stack([x["input_ids_for_decoder2"] for x in batch])
             masks_for_decoder2 = torch.stack([x["attention_mask_for_decoder2"] for x in batch])
+            use_consist = torch.tensor([x["use_consist"] for x in batch])
         target_ids = torch.stack([x["decoder_input_ids"] for x in batch])
         tgt_pad_token_id = (
             self.tokenizer.generator.pad_token_id
@@ -186,6 +191,7 @@ class Seq2SeqDataset(Dataset):
                 "attention_mask2": source_mask2,
                 "input_ids_for_decoder2": source_ids_fd2,
                 "attention_mask_for_decoder2": source_mask_fd2,
+                "use_consist": use_consist,
             })
         return result
 

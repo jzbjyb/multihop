@@ -13,6 +13,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 from collections import defaultdict
+from operator import itemgetter
 
 from transformers import BartForConditionalGeneration, RagRetriever, RagSequenceForGeneration, RagTokenForGeneration, AutoTokenizer
 from transformers import logging as transformers_logging
@@ -285,7 +286,7 @@ def evaluate_batch_e2e(args, rag_model, questions):
             min_length=args.min_length,
             max_length=args.max_length,
             early_stopping=False,
-            num_return_sequences=1,
+            num_return_sequences=args.num_return_sequences,
             bad_words_ids=[[0, 0]],  # BART likes to repeat BOS tokens, dont allow it to generate more than one
         )
         answers = rag_model.retriever.generator_tokenizer.batch_decode(outputs, skip_special_tokens=True)
@@ -300,16 +301,19 @@ def evaluate_batch_e2e(args, rag_model, questions):
 def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
     qtds = [q.split('\t') for q in questions]
     def format_qtd(qtd):
-        if len(qtd) == 3:
-            q, ct, cd = qtd
+        score = 0.0
+        if len(qtd) in {3, 4}:
+            q, ct, cd = qtd[:3]
+            score = float(qtd[3]) if len(qtd) > 3 else 0.0
             ct = ct.strip('"')
-            return (ct + rag_model.config.title_sep + cd + rag_model.config.doc_sep + q).replace("  ", " ")
+            return (ct + rag_model.config.title_sep + cd + rag_model.config.doc_sep + q).replace("  ", " "), score
         if len(qtd) == 1:
-            return qtd[0].replace("  ", " ")
+            return qtd[0].replace("  ", " "), score
         raise NotImplementedError
     with torch.no_grad():
+        text_scores = [format_qtd(qtd) for qtd in qtds]
         context_input = rag_model.retriever.generator_tokenizer.batch_encode_plus(
-            [format_qtd(qtd) for qtd in qtds],
+            list(map(itemgetter(0), text_scores)),
             max_length=rag_model.config.max_combined_length,
             return_tensors='pt',
             padding='max_length',
@@ -318,7 +322,9 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
 
         cinput_ids = context_input.input_ids.to(args.device)
         cattention_mask = context_input.attention_mask.to(args.device)
-        doc_score = torch.zeros(cinput_ids.size(0), 1).to(args.device)
+        doc_score = torch.tensor(list(map(itemgetter(1), text_scores))).view(
+            cinput_ids.size(0) // args.n_docs, args.n_docs).to(args.device)
+        assert cinput_ids.size(0) % args.n_docs == 0, 'the batch is incomplete'
         outputs, logprobs = rag_model.generate(
             context_input_ids=cinput_ids,
             context_attention_mask=cattention_mask,
@@ -327,8 +333,8 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
             min_length=args.min_length,
             max_length=args.max_length,
             early_stopping=False,
-            num_return_sequences=1,
-            n_docs=1,
+            num_return_sequences=args.num_return_sequences,
+            n_docs=args.n_docs,
             bad_words_ids=[[0, 0]],  # BART likes to repeat BOS tokens, dont allow it to generate more than one
         )
         answers = rag_model.retriever.generator_tokenizer.batch_decode(outputs, skip_special_tokens=True)
@@ -361,7 +367,7 @@ def get_args():
         type=str,
         help="Path to the retrieval index",
     )
-    parser.add_argument("--n_docs", default=5, type=int, help="Number of retrieved docs")
+    parser.add_argument("--n_docs", default=1, type=int, help="Number of retrieved docs")
     parser.add_argument(
         "--model_name_or_path",
         default=None,
@@ -434,6 +440,12 @@ def get_args():
         default=4,
         type=int,
         help="Number of beams to be used when generating answers",
+    )
+    parser.add_argument(
+        "--num_return_sequences",
+        default=1,
+        type=int,
+        help="Number of returned answers",
     )
     parser.add_argument("--min_length", default=1, type=int, help="Min length of the generated answers")
     parser.add_argument("--max_length", default=50, type=int, help="Max length of the generated answers")
