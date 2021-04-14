@@ -20,7 +20,7 @@ from transformers import logging as transformers_logging
 
 
 sys.path.append(os.path.join(os.getcwd()))  # noqa: E402 # isort:skip
-from utils_rag import exact_match_score, f1_score  # noqa: E402 # isort:skip
+from utils_rag import exact_match_score, f1_score, truncate_context_with_question  # noqa: E402 # isort:skip
 from rag_model import MyRagSequenceForGeneration
 from finetune_rag import GenerativeQAModule, root_to_mdr
 from dataset import Break, PseudoBreak
@@ -306,7 +306,8 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
             q, ct, cd = qtd[:3]
             score = float(qtd[3]) if len(qtd) > 3 else 0.0
             ct = ct.strip('"')
-            return (ct + rag_model.config.title_sep + cd + rag_model.config.doc_sep + q).replace("  ", " "), score
+            text = truncate_context_with_question(ct + rag_model.config.title_sep + cd, q, max_length=args.max_source_length) + rag_model.config.doc_sep + q
+            return text.replace("  ", " "), score
         if len(qtd) == 1:
             return qtd[0].replace("  ", " "), score
         raise NotImplementedError
@@ -314,7 +315,7 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
         text_scores = [format_qtd(qtd) for qtd in qtds]
         context_input = rag_model.retriever.generator_tokenizer.batch_encode_plus(
             list(map(itemgetter(0), text_scores)),
-            max_length=rag_model.config.max_combined_length,
+            max_length=args.max_source_length,
             return_tensors='pt',
             padding='max_length',
             truncation=True,

@@ -3,6 +3,7 @@ from collections import defaultdict
 import argparse
 import json
 import urllib
+import random
 from random import shuffle
 import numpy as np
 import spacy
@@ -14,6 +15,10 @@ import matplotlib.pyplot as plot
 from dataset import Break, HoptopQA, WebQuestion, ComplexWebQuestion, SlingExtractor, MultihopQuestion, GraphQuestion
 from rag.utils_rag import exact_match_score, f1_score
 from rag.eval_rag import get_scores
+
+SEED=2021
+random.seed(SEED)
+np.random.seed(SEED)
 
 eval_stat = {
   'multi': [0, 0],
@@ -251,11 +256,23 @@ def entity_linking_on_elq(input_file: str, output_file: str, dataset: Union[Grap
   print('find {} among {} answer entities'.format(found, total))
 
 
+def mix_pos_neg(pos_docs, neg_docs, neg_max_token: int=None):
+  if neg_max_token:
+    neg_docs = [(did, title, ' '.join(body.split(' ')[:neg_max_token])) for did, title, body in neg_docs]
+  docs = pos_docs + neg_docs
+  shuffle(docs)
+  combine_title = ' '.join([t for _, t, _ in docs])
+  combine_body = ' '.join([b for _, _, b in docs])
+  return combine_title, combine_body
+
+
 def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, output_file: str,
-                        num_gold: int=1, ans_sep: str='\t\t', alias_sep: str='\t', num_hop: int=2):
+                        num_gold: int=1, num_neg: int=0, num_hop: int=2):
+  if num_neg > 0 and num_gold != 1:
+    raise Exception('should be only on positive when concatenated with negative docs')
   pos2gold: Dict[int, int] = defaultdict(lambda: 0)
   hasgold2count: Dict[int, int] = defaultdict(lambda: 0)
-  fould_gold = total = 0
+  fould_gold = found_neg = total = 0
   prev_docs = []
   with open(source_file, 'r') as sfin, \
     open(target_file, 'r') as tfin, \
@@ -269,21 +286,22 @@ def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, outpu
       if docs == '':
         break
       docs = docs.strip().split('\t')[:-1]
-      docs = [doc.split(' || ') for doc in docs]
-      has_gold = 0
+      docs = [doc.split(' || ', 2) for doc in docs]
+      has_gold = has_neg = 0
       if (id + 1) % (num_hop + 1) == 0:  # multihop
         if len(prev_docs) >= 2 and prev_docs[-1][0] == id - 1 and prev_docs[-2][0] == id - 2:
-          has_gold = 1
           fout.write('{}\t{}\t{}\n'.format(
             question, '{} {}'.format(prev_docs[-2][1], prev_docs[-1][1]), '{} {}'.format(prev_docs[-2][2], prev_docs[-1][2])))
           ifout.write('{}\n'.format(id))
       else:
+        pos_docs = []
+        neg_docs = []
         for i, doc in enumerate(docs):
           find_all = True
           for answer in answers:
             find = False
             for alias in answer:
-              if alias.lower() in (doc[1] + ' ' + doc[2]).lower():
+              if alias.strip().lower() in (doc[1] + ' ' + doc[2]).lower():
                 find = True
                 break
             if not find:
@@ -293,15 +311,25 @@ def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, outpu
             pos2gold[i] += 1
             has_gold += 1
             if has_gold <= num_gold:
-              prev_docs.append((id, doc[1], doc[2]))
-              fout.write('{}\t{}\t{}\n'.format(question, doc[1], doc[2]))
-              ifout.write('{}\n'.format(id))
-            else:
-              break
-      fould_gold += int(has_gold > 0)
-      hasgold2count[has_gold] += 1
-      total += 1
+              pos_docs.append(doc)
+          else:
+            has_neg += 1
+            if has_neg <= num_neg:
+              neg_docs.append(doc)
+          if has_gold >= num_gold and has_neg >= num_neg:
+            break
+        if len(pos_docs) == num_gold and len(neg_docs) == num_neg:
+          combine_title, combine_body = mix_pos_neg(pos_docs, neg_docs, neg_max_token=50)
+          prev_docs.append((id, combine_title, combine_body))
+          fout.write('{}\t{}\t{}\n'.format(question, combine_title, combine_body))
+          ifout.write('{}\n'.format(id))
+
+        fould_gold += int(has_gold >= num_gold)
+        found_neg += int(has_neg >= num_neg)
+        hasgold2count[has_gold] += 1
+        total += 1
   print('found {} among {} that have gold'.format(fould_gold, total))
+  print('found {} among {} that have neg'.format(found_neg, total))
   print('position -> portion with gold')
   for k, v in sorted(pos2gold.items(), key=lambda x: x[0]):
     print('{}\t{:.3f}'.format(k, v / total))
@@ -636,7 +664,7 @@ def get_explicit_data(source_file, target_file, output_source_file, output_targe
         shq = ' '.join(shs)
         sfout.write('{}\t{}\t{}\n'.format('Decompose and answer the following question: ' + mhq, sp[1], sp[2]))
         tfout.write(target + '\n')
-        sfout.write('{}\t{}\t{}\n'.format('Decompose the following question: ' + mhq, sp[1], sp[2]))
+        sfout.write('{}\n'.format('Decompose the following question: ' + mhq))
         tfout.write(shq + '\n')
         sfout.write('{}\t{}\t{}\n'.format('Answer the following question: ' + shq, sp[1], sp[2]))
         tfout.write(target + '\n')
@@ -1406,7 +1434,8 @@ if __name__ == '__main__':
     source_file, target_file, ret_file = args.input
     output_file = args.output
     num_gold = 1
-    find_gold_retrieval(source_file, target_file, ret_file, output_file, num_gold=num_gold)
+    num_neg = 2
+    find_gold_retrieval(source_file, target_file, ret_file, output_file, num_gold=num_gold, num_neg=num_neg)
 
   elif args.task == 'gold_ret_compare':
     source_file, target_file, pred_file, ret_pred_file, ret_file_id = args.input[:5]

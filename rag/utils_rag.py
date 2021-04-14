@@ -45,6 +45,13 @@ def trim_batch(
         return (input_ids[:, keep_column_mask], attention_mask[:, keep_column_mask])
 
 
+def truncate_context_with_question(context: str, question: str, max_length: int, ratio: float=1.8):
+    nq = len(question.split(' '))
+    context = context.split(' ')
+    context = context[:int((max_length - nq * ratio) / ratio)]
+    return ' '.join(context)
+
+
 class Seq2SeqDataset(Dataset):
     def __init__(
         self,
@@ -86,11 +93,14 @@ class Seq2SeqDataset(Dataset):
             sp = source_line.split('\t')
             if len(sp) == 3:  # one example
                 q, title, text = sp
-                source_line = title + self.title_sep + text + self.doc_sep + q
+                source_line = truncate_context_with_question(
+                    title + self.title_sep + text, q, max_length=self.max_source_length) + self.doc_sep + q
             elif len(sp) == 4:  # two examples
                 q1, q2, title, text = sp
-                source_line = title + self.title_sep + text + self.doc_sep + q1
-                source_line2 = title + self.title_sep + text + self.doc_sep + q2
+                source_line = truncate_context_with_question(
+                    title + self.title_sep + text, q1, max_length=self.max_source_length) + self.doc_sep + q1
+                source_line2 = truncate_context_with_question(
+                    title + self.title_sep + text, q2, max_length=self.max_source_length) + self.doc_sep + q2
                 if q2 != '#':
                     use_consist = True
             else:

@@ -10,21 +10,24 @@ export PYTHONPATH="../":"${PYTHONPATH}"
 # run ./examples/rag/finetune_rag.sh --help to see all the possible options
 
 DATA_DIR=$1  # /home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa/full_qa_small
-MODEL_NAME_OR_PATH=facebook/rag-sequence-nq  # facebook/rag-sequence-nq
-max_combined_length=300
+MODEL_NAME_OR_PATH=facebook/rag-sequence-nq # facebook/rag-sequence-nq
+MODEL2=models_more/cwq_hotpotqa/rag_ssm_explicit/checkpoint11
+max_combined_length=512
 max_target_length=25
 n_docs=1
 mode=no
 consistency_loss=$2
+distance=$3
 hop=1
-OUTPUT_DIR=$3  # models/rag_combine
-gpus=0
-ngpus=1
-port=$4
+OUTPUT_DIR=$4  # models/rag_combine
+gpus=$5
+ngpus=$6
+port=$7
 batch_size=4  # $(( 1*${ngpus} ))
 
 #CUDA_VISIBLE_DEVICES=${gpus} proxychains4
-python finetune_rag.py \
+#HF_HOME=$HOME/tir4/hf_home_cache
+CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --data_dir $DATA_DIR \
     --output_dir $OUTPUT_DIR \
     --model_name_or_path $MODEL_NAME_OR_PATH \
@@ -56,4 +59,5 @@ python finetune_rag.py \
     --retrieval_hop ${hop} \
     --max_combined_length ${max_combined_length} \
     --distributed-port ${port} \
-    --consistency_loss ${consistency_loss}
+    --consistency_loss ${consistency_loss} \
+    --distance ${distance}
