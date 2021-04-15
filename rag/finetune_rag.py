@@ -221,6 +221,23 @@ class GenerativeQAModule(BaseTransformer):
             self.model2.rag.generator.model.shared = self.model.rag.generator.model.shared
             self.model2.rag.generator.model.encoder = self.model.rag.generator.model.encoder
             self.model2.rag.generator.model.decoder.embed_tokens = self.model.rag.generator.model.shared
+        elif self.multitask.startswith('encoder'):
+            self.model2 = self.model_class.from_pretrained(hparams.model_name_or_path, config=config, retriever=retriever)
+            num_diff_layer = int(self.multitask.lstrip('encoder'))
+            num_same_layer = len(self.model2.rag.generator.model.encoder.layers) - num_diff_layer
+            # emb
+            shared_emb = self.model.rag.generator.model.shared
+            self.model2.rag.generator.model.shared = shared_emb
+            self.model2.rag.generator.model.encoder.embed_tokens = shared_emb
+            self.model2.rag.generator.model.decoder.embed_tokens = shared_emb
+            # pos
+            self.model2.rag.generator.model.encoder.embed_positions = self.model.rag.generator.model.encoder.embed_positions
+            # layer norm
+            self.model2.rag.generator.model.encoder.layernorm_embedding = self.model.rag.generator.model.encoder.layernorm_embedding
+            # layers
+            self.model2.rag.generator.model.encoder.layers = torch.nn.ModuleList(
+                [self.model.rag.generator.model.encoder.layers[i] for i in range(num_same_layer)] +
+                [self.model2.rag.generator.model.encoder.layers[i + num_same_layer] for i in range(num_diff_layer)])
         else:
             raise NotImplementedError
 
@@ -815,7 +832,7 @@ class GenerativeQAModule(BaseTransformer):
         parser.add_argument('--fix_retriever', action='store_true')
         parser.add_argument('--fix_generator', action='store_true')
         parser.add_argument('--consistency_loss', type=str, choices=['no', 'combine', 'only'], default='no')
-        parser.add_argument('--multitask', type=str, choices=['no', 'decoder'], default='no')
+        parser.add_argument('--multitask', type=str, default='no')
         parser.add_argument('--distance', type=str, choices=['jsd', 'kl'], default='jsd')
         return parser
 
