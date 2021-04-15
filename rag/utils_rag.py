@@ -64,6 +64,7 @@ class Seq2SeqDataset(Dataset):
         src_lang=None,
         tgt_lang=None,
         prefix="",
+        only_question_for_input2=False,
     ):
         super().__init__()
         self.src_file = Path(data_dir).joinpath(type_path + ".source")
@@ -80,6 +81,7 @@ class Seq2SeqDataset(Dataset):
         self.tgt_lang = tgt_lang
         self.title_sep = ' / '
         self.doc_sep = ' // '
+        self.only_question_for_input2 = only_question_for_input2
 
     def __len__(self):
         return len(self.src_lens)
@@ -88,7 +90,7 @@ class Seq2SeqDataset(Dataset):
         index = index + 1  # linecache starts at 1
         source_line = self.prefix + linecache.getline(str(self.src_file), index).rstrip("\n")
         source_line2 = None
-        use_consist = False
+        two_inputs = False
         if '\t' in source_line:  # has context
             sp = source_line.split('\t')
             if len(sp) == 3:  # one example
@@ -99,10 +101,13 @@ class Seq2SeqDataset(Dataset):
                 q1, q2, title, text = sp
                 source_line = truncate_context_with_question(
                     title + self.title_sep + text, q1, max_length=self.max_source_length) + self.doc_sep + q1
-                source_line2 = truncate_context_with_question(
-                    title + self.title_sep + text, q2, max_length=self.max_source_length) + self.doc_sep + q2
+                if self.only_question_for_input2:
+                    source_line2 = q2
+                else:
+                    source_line2 = truncate_context_with_question(
+                        title + self.title_sep + text, q2, max_length=self.max_source_length) + self.doc_sep + q2
                 if q2 != '#':
-                    use_consist = True
+                    two_inputs = True
             else:
                 raise NotImplementedError
         tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")
@@ -152,7 +157,7 @@ class Seq2SeqDataset(Dataset):
                 "attention_mask2": src_mask2,
                 "input_ids_for_decoder2": source_ids_for_decoder2,
                 "attention_mask_for_decoder2": src_mask_for_decoder2,
-                "use_consist": int(use_consist)
+                "two_inputs": int(two_inputs)
             })
         return example
 
@@ -170,7 +175,7 @@ class Seq2SeqDataset(Dataset):
             masks2 = torch.stack([x["attention_mask2"] for x in batch])
             input_ids_for_decoder2 = torch.stack([x["input_ids_for_decoder2"] for x in batch])
             masks_for_decoder2 = torch.stack([x["attention_mask_for_decoder2"] for x in batch])
-            use_consist = torch.tensor([x["use_consist"] for x in batch])
+            two_inputs = torch.tensor([x["two_inputs"] for x in batch])
         target_ids = torch.stack([x["decoder_input_ids"] for x in batch])
         tgt_pad_token_id = (
             self.tokenizer.generator.pad_token_id
@@ -201,7 +206,7 @@ class Seq2SeqDataset(Dataset):
                 "attention_mask2": source_mask2,
                 "input_ids_for_decoder2": source_ids_fd2,
                 "attention_mask_for_decoder2": source_mask_fd2,
-                "use_consist": use_consist,
+                "two_inputs": two_inputs,
             })
         return result
 

@@ -754,6 +754,23 @@ def gen_multi_2hop(source_file, target_file, pred_file, out_source_file, out_tar
     print('{} has dups'.format(dup_count))
 
 
+def implicit2normalmultitask(source_file, target_file, output_source_file, output_target_file, num_hop: int=2):
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
+    open(output_source_file, 'w') as sfout, open(output_target_file, 'w') as tfout:
+    prev = None
+    for i, s in enumerate(sfin):
+      q, title, body = s.strip().split('\t')
+      t = tfin.readline()
+      if i % (num_hop + 2) in {0, 1}:
+        sfout.write('{}\t{}\t{}\t{}\n'.format(q, '#', title, body))
+        tfout.write(t)
+      elif i % (num_hop + 2) == 2:
+        prev = q
+      else:
+        sfout.write('{}\t{}\t{}\t{}\n'.format(prev, q, title, body))
+        tfout.write(t)
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -766,7 +783,7 @@ if __name__ == '__main__':
     'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq',
     'eval_json', 'consistency_data', 'explicit_data', 'implicit_data',
     'implicit_data_with_explicit', 'implicit_data_with_normal',
-    '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop'], default='hotpotqa')
+    '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop', 'implicit2normalmultitask'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1584,6 +1601,11 @@ if __name__ == '__main__':
     source_file, target_file, raw_source_file = args.input
     output_source_file, output_target_file = source_file + '.implicit', target_file + '.implicit'
     get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file)
+
+  elif args.task == 'implicit2normalmultitask':
+    source_file, target_file = args.input
+    output_source_file, output_target_file = source_file.rstrip('.implicit') + '.multitask', target_file.rstrip('.implicit') + '.multitask'
+    implicit2normalmultitask(source_file, target_file, output_source_file, output_target_file)
 
   elif args.task == 'implicit_data_with_explicit':
     source_file, target_file, raw_source_file = args.input

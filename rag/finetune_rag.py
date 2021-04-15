@@ -133,6 +133,9 @@ class GenerativeQAModule(BaseTransformer):
         self.fix_generator = hparams.fix_generator
         self.consistency_loss = hparams.consistency_loss
         self.distance = hparams.distance
+        self.multitask = hparams.multitask
+        if self.multitask != 'no' and hparams.model_name_or_path2 is not None:
+            raise Exception('multitask only uses one model')
 
         config_class = RagConfig if self.is_rag_model else AutoConfig
         config = config_class.from_pretrained(hparams.model_name_or_path)
@@ -210,6 +213,16 @@ class GenerativeQAModule(BaseTransformer):
 
         super().__init__(hparams, config=config, tokenizer=tokenizer, model=model)
         self.model2 = model2
+        if self.multitask == 'no':
+            pass
+        elif self.multitask == 'decoder':
+            self.model2 = self.model_class.from_pretrained(hparams.model_name_or_path, config=config, retriever=retriever)
+            # share encoder
+            self.model2.rag.generator.model.shared = self.model.rag.generator.model.shared
+            self.model2.rag.generator.model.encoder = self.model.rag.generator.model.encoder
+            self.model2.rag.generator.model.decoder.embed_tokens = self.model.rag.generator.model.shared
+        else:
+            raise NotImplementedError
 
         #save_git_info(self.hparams.output_dir)  # TODO: debug
         self.output_dir = Path(self.hparams.output_dir)
@@ -223,6 +236,7 @@ class GenerativeQAModule(BaseTransformer):
             data_dir=self.hparams.data_dir,
             max_source_length=self.hparams.max_source_length,
             prefix=prefix or "",
+            only_question_for_input2=self.multitask != 'no',
         )
         n_observations_per_split = {
             "train": self.hparams.n_train,
@@ -389,7 +403,7 @@ class GenerativeQAModule(BaseTransformer):
             )
         return (loss,)
 
-    def compute_consistency_loss(self, logits1, logits2, target, use_consist):
+    def compute_consistency_loss(self, logits1, logits2, target, two_inputs):
         pad_token_id = self.model.config.generator.pad_token_id
         target = torch.cat([target[:, 1:], target.new(target.shape[0], 1).fill_(pad_token_id)], 1)
         pad_mask = target.eq(pad_token_id)
@@ -412,7 +426,7 @@ class GenerativeQAModule(BaseTransformer):
             loss = kl.sum(-1)
         else:
             raise NotImplementedError
-        loss = (loss * use_consist.float()).sum()
+        loss = (loss * two_inputs.float()).sum()
         return loss
 
     def _step(self, batch: dict, use_retrieval: bool=True) -> Tuple:
@@ -422,7 +436,6 @@ class GenerativeQAModule(BaseTransformer):
         source_ids, source_mask, target_ids = batch["input_ids"], batch["attention_mask"], batch["decoder_input_ids"]
         source_ids_fd, source_mask_fd = batch["input_ids_for_decoder"], batch["attention_mask_for_decoder"]
 
-        rag_kwargs = {}
         if isinstance(self.model, T5ForConditionalGeneration):
             decoder_input_ids = self.model._shift_right(target_ids)
             lm_labels = target_ids
@@ -445,7 +458,6 @@ class GenerativeQAModule(BaseTransformer):
             elif isinstance(generator, BartForConditionalGeneration):
                 decoder_input_ids = target_ids
             lm_labels = decoder_input_ids
-            rag_kwargs["reduce_loss"] = True
 
         assert decoder_input_ids is not None
 
@@ -459,29 +471,44 @@ class GenerativeQAModule(BaseTransformer):
                 use_cache=False,
                 labels=lm_labels,
                 n_docs=1,
-                **rag_kwargs,
+                reduce_loss=True,
             )
+
+            # multitask or consistency regularization
+            if (self.multitask != 'no' or self.consistency_loss != 'no') and 'input_ids2' not in batch:
+                raise Exception('multitask/consistency requires input2')
             if 'input_ids2' in batch:
                 source_ids2, source_mask2 = batch["input_ids2"], batch["attention_mask2"]
                 source_ids_fd2, source_mask_fd2 = batch["input_ids_for_decoder2"], batch["attention_mask_for_decoder2"]
-                if self.model2 is not None:
-                    fw_func = self.model2
-                else:
-                    fw_func = self.model
-                outputs2 = fw_func(
-                    input_ids=None,
-                    context_input_ids=source_ids_fd2,
-                    context_attention_mask=source_mask_fd2,
-                    doc_scores=source_ids2.new_zeros(source_ids2.size(0), 1).float(),
-                    decoder_input_ids=decoder_input_ids,
-                    use_cache=False,
-                    labels=lm_labels,
-                    n_docs=1,
-                    **rag_kwargs,
-                )
-                if self.consistency_loss != 'no':
+                two_inputs = batch['two_inputs']
+                model2_fw = self.model2 if self.model2 is not None else self.model
+                if self.multitask != 'no':  # multitasking
+                    outputs2 = model2_fw(
+                        input_ids=None,
+                        context_input_ids=source_ids_fd,
+                        context_attention_mask=source_mask_fd,
+                        doc_scores=source_ids.new_zeros(source_ids.size(0), 1).float(),
+                        decoder_input_ids=source_ids_fd2,
+                        use_cache=False,
+                        labels=source_ids_fd2,  # TODO: only works for RAG
+                        n_docs=1,
+                        reduce_loss=False,
+                    )
+                    outputs2['loss'] = (outputs2['loss'] * two_inputs.float()).sum()
+                elif self.consistency_loss != 'no':  # consistency
+                    outputs2 = model2_fw(
+                        input_ids=None,
+                        context_input_ids=source_ids_fd2,
+                        context_attention_mask=source_mask_fd2,
+                        doc_scores=source_ids2.new_zeros(source_ids2.size(0), 1).float(),
+                        decoder_input_ids=decoder_input_ids,
+                        use_cache=False,
+                        labels=lm_labels,
+                        n_docs=1,
+                        reduce_loss=True,
+                    )
                     consist_loss = self.compute_consistency_loss(
-                        outputs['logits'], outputs2['logits'].detach(), decoder_input_ids, batch['use_consist'])
+                        outputs['logits'], outputs2['logits'].detach(), decoder_input_ids, two_inputs)
         else:
             outputs = self(
                 source_ids,
@@ -489,13 +516,18 @@ class GenerativeQAModule(BaseTransformer):
                 decoder_input_ids=decoder_input_ids,
                 use_cache=False,
                 labels=lm_labels,
-                **rag_kwargs,
+                reduce_loss=True,
             )
 
-        if self.consistency_loss == 'combine':
-            loss = outputs["loss"] + consist_loss
-        elif self.consistency_loss == 'only':
-            loss = consist_loss
+        if self.multitask != 'no':
+            loss = outputs['loss'] + outputs2['loss']
+        elif self.consistency_loss != 'no':
+            if self.consistency_loss == 'combine':
+                loss = outputs["loss"] + consist_loss
+            elif self.consistency_loss == 'only':
+                loss = consist_loss
+            else:
+                raise NotImplementedError
         else:
             loss = outputs["loss"]
 
@@ -783,6 +815,7 @@ class GenerativeQAModule(BaseTransformer):
         parser.add_argument('--fix_retriever', action='store_true')
         parser.add_argument('--fix_generator', action='store_true')
         parser.add_argument('--consistency_loss', type=str, choices=['no', 'combine', 'only'], default='no')
+        parser.add_argument('--multitask', type=str, choices=['no', 'decoder'], default='no')
         parser.add_argument('--distance', type=str, choices=['jsd', 'kl'], default='jsd')
         return parser
 
