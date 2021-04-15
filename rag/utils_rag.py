@@ -108,6 +108,17 @@ class Seq2SeqDataset(Dataset):
                         title + self.title_sep + text, q2, max_length=self.max_source_length) + self.doc_sep + q2
                 if q2 != '#':
                     two_inputs = True
+            elif len(sp) == 6:  # two examples (two context)
+                q1, q2, title1, text1, title2, text2 = sp
+                source_line = truncate_context_with_question(
+                    title1 + self.title_sep + text1, q1, max_length=self.max_source_length) + self.doc_sep + q1
+                if self.only_question_for_input2:
+                    source_line2 = q2
+                else:
+                    source_line2 = truncate_context_with_question(
+                        title2 + self.title_sep + text2, q2, max_length=self.max_source_length) + self.doc_sep + q2
+                if q2 != '#':
+                    two_inputs = True
             else:
                 raise NotImplementedError
         tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")

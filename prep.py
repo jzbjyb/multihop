@@ -677,6 +677,33 @@ def get_explicit_data(source_file, target_file, output_source_file, output_targe
         tfout.write(target + '\n')
 
 
+def normal_data(source_file, target_file, output_source_file, output_target_file, num_hop=2, with_consist: str=None):
+  shs = []
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
+    open(output_source_file, 'w') as sfout, open(output_target_file, 'w') as tfout:
+    for i, l in enumerate(sfin):
+      source = l.strip()
+      target = tfin.readline().strip()
+      if i % (num_hop + 1) == num_hop:  # multihop
+        sp = source.split('\t')
+        mhq = sp[0]
+        consist_q, consist_title, consist_body = shs[-1].split('\t')
+        if with_consist == 'explicit':
+          consist_q = 'Answer the following question: ' + consist_q
+        elif with_consist == 'normal':
+          pass
+        else:
+          raise NotImplementedError
+        sfout.write('{}\t{}\t{}\t{}\t{}\t{}\n'.format(mhq, consist_q, sp[1], sp[2], consist_title, consist_body))
+        tfout.write(target + '\n')
+        shs = []
+      else:  # singlehop
+        sp = source.split('\t')
+        shs.append(source)
+        sfout.write('{}\t{}\t{}\t{}\n'.format(sp[0], '#', sp[1], sp[2]))
+        tfout.write(target + '\n')
+
+
 def get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file, num_hop=2, with_consist: str=None):
   shs = []
   raw_shs = []
@@ -754,6 +781,21 @@ def gen_multi_2hop(source_file, target_file, pred_file, out_source_file, out_tar
     print('{} has dups'.format(dup_count))
 
 
+def sample_subset(source_file, target_file, id_file, new_source_file, new_target_file, new_id_file, inter: int, samples: Set[int]):
+  id_inter = 3
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin,  open(id_file, 'r') as ifin,  \
+    open(new_source_file, 'w') as sfout,  open(new_target_file, 'w') as tfout,  open(new_id_file, 'w') as ifout:
+    for i, s in enumerate(sfin):
+      t = tfin.readline()
+      if i % inter < 3:
+        id = ifin.readline()
+      if (i // inter) in samples:
+        sfout.write(s)
+        tfout.write(t)
+        if i % inter < id_inter:
+          ifout.write(id)
+
+
 def implicit2normalmultitask(source_file, target_file, output_source_file, output_target_file, num_hop: int=2):
   with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
     open(output_source_file, 'w') as sfout, open(output_target_file, 'w') as tfout:
@@ -774,15 +816,15 @@ def implicit2normalmultitask(source_file, target_file, output_source_file, outpu
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
-    'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'ner', 'ner_replace',
-    'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format',
+    'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'compare', 'ner', 'ner_replace',
+    'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'subset',
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
     'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter',
     'convert_unifiedqa_ol', 'break_unifiedqa_output', 'filter_hotpotqa',
     'combine_split', 'combine_multi_targets', 'replace_hop',
     'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq',
     'eval_json', 'consistency_data', 'explicit_data', 'implicit_data',
-    'implicit_data_with_explicit', 'implicit_data_with_normal',
+    'implicit_data_with_explicit', 'implicit_data_with_normal', 'normal_data_with_explicit',
     '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop', 'implicit2normalmultitask'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
@@ -873,6 +915,64 @@ if __name__ == '__main__':
           cfout.write(ex['cluster_id'] + '\n')
           sfout.write(q + '\n')
           tfout.write(answers + '\n')
+
+  elif args.task == 'compare':
+    num_hops = args.num_hops
+    source1, target1, pred1, inter1, source2, target2, pred2, inter2 = args.input
+    inter1, inter2 = int(inter1), int(inter2)
+    source_li1 = []
+    target_li1 = []
+    pred_li1 = []
+    source_li2 = []
+    target_li2 = []
+    pred_li2 = []
+    for sf, tf, pf, inter, sl, tl, pl in \
+      [(source1, target1, pred1, inter1, source_li1, target_li1, pred_li1),
+       (source2, target2, pred2, inter2, source_li2, target_li2, pred_li2)]:
+      with open(sf, 'r') as sfin, open(tf, 'r') as tfin, open(pf, 'r') as pfin:
+        for i, s in enumerate(sfin):
+          if i % inter == 0:
+            sl.append([])
+            tl.append([])
+            pl.append([])
+          sl[-1].append(s.strip())
+          tl[-1].append(tfin.readline().strip())
+          pl[-1].append(pfin.readline().strip().split('\t')[0])
+    pred2count1 = defaultdict(list)
+    pred2count2 = defaultdict(list)
+    bucket = defaultdict(lambda: defaultdict(lambda: 0))
+    all_cases = defaultdict(lambda: defaultdict(list))
+    for sources1, targets1, sources2, targets2, preds1, preds2 in zip(
+      source_li1, target_li1, source_li2, target_li2, pred_li1, pred_li2):
+      for i in range(num_hops + 1):
+        em1 = evaluation(preds1[i], targets1[i], eval_mode='multi-multi')
+        em2 = evaluation(preds2[i], targets1[i], eval_mode='multi-multi')
+        pred2count1[i].append(em1)
+        pred2count2[i].append(em2)
+        bucket[i]['{}{}'.format(int(em1), int(em2))] += 1
+        all_cases[i]['{}{}'.format(int(em1), int(em2))].append(
+          (sources1[i], targets1[i], preds1[i], sources2[i], targets2[i], preds2[i]))
+    print([(k, '{:.2f}'.format(np.mean(v) * 100)) for k, v in pred2count1.items()])
+    print([(k, '{:.2f}'.format(np.mean(v) * 100)) for k, v in pred2count2.items()])
+    print(bucket)
+    with open(args.output, 'w') as fout:
+      for hop, cate2cases in all_cases.items():
+        hop = 'multi' if hop == 2 else hop
+        fout.write('<h1>HOP: {}</h1>\n'.format(hop))
+        for cate, cases in cate2cases.items():
+          fout.write('<h2>HOP: {} category: {}</h2>\n'.format(hop, cate))
+          shuffle(cases)
+          for case in cases[:100]:
+            for ind, (s, t, p) in enumerate([case[:3], case[3:]]):
+              q, title, body = s.split('\t')
+              fout.write('<div> system {} </div>\n'.format(ind))
+              fout.write('<div>--> QUESTION: {}</div>\n'.format(q))
+              fout.write('<div style="padding-left: 80px;">--> TITLE: {}</div>\n'.format(title))
+              fout.write('<div style="padding-left: 80px;">--> BODY: {}</div>\n'.format(body))
+              fout.write('<div>--> GOLD: {}</div>\n'.format(t))
+              fout.write('<div>--> PREDICTION: {}</div>\n'.format(p))
+              fout.write('<br>\n')
+            fout.write('<hr>\n')
 
   elif args.task == 'ana':
     def printify(case):
@@ -1617,6 +1717,11 @@ if __name__ == '__main__':
     output_source_file, output_target_file = source_file + '.implicit2normal', target_file + '.implicit2normal'
     get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file, with_consist='normal')
 
+  elif args.task == 'normal_data_with_explicit':
+    source_file, target_file = args.input
+    output_source_file, output_target_file = source_file + '.normal2explicit', target_file + '.normal2explicit'
+    normal_data(source_file, target_file, output_source_file, output_target_file, with_consist='explicit')
+
   elif args.task == 'gen_multi_2hop':
     count = 10
     source_file, target_file, pred_file = args.input
@@ -1627,3 +1732,14 @@ if __name__ == '__main__':
   elif args.task == 'ana_reducehop':
     json_file, raw_pred_file = args.input
     ana_reducehop(json_file, raw_pred_file)
+
+  elif args.task == 'subset':
+    sample_count = 100
+    all_count = 7000
+    samples = np.random.choice(all_count, sample_count, replace=False)
+    print(samples)
+    source_file, target_file, id_file, inter = args.input
+    inter = int(inter)
+    new_source_file, new_target_file, new_id_file = \
+      source_file + '.{}'.format(sample_count), target_file + '.{}'.format(sample_count), id_file + '.{}'.format(sample_count)
+    sample_subset(source_file, target_file, id_file, new_source_file, new_target_file, new_id_file, inter, samples)
