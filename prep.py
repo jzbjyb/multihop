@@ -26,6 +26,7 @@ eval_stat = {
   'multi-predictions': [0, 0],
 }
 join_sep = ' # '
+inplace_join_sep = ', '
 alias_sep = '\t'
 ans_sep = '\t\t'
 
@@ -39,7 +40,7 @@ numhops2temps: Dict[int, List[str]] = {
 i2ph = {0: 'XXX', 1: 'YYY', 2: 'ZZZ', 3: 'AAA', 4: 'BBB', 5: 'CCC', 6: 'DDD', 7: 'EEE', 8: 'FFF', 9: 'GGG', 10: 'HHH'}
 
 
-def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t'):
+def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score):
   if eval_mode == 'multi-multi':
     predictions = predictions.split(pred_sep)
     targets = [ans.split(alias_sep) for ans in targets.split(ans_sep)]
@@ -54,7 +55,7 @@ def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pre
     for tar in targets:  # match each target with all predictions
       score = False
       for pred in predictions:
-        score = np.max([exact_match_score(pred, t) for t in tar]) or score
+        score = np.max([score_fn(pred, t) for t in tar]) or score
         if score:
           break
       if not score:
@@ -69,11 +70,11 @@ def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pre
   elif eval_mode == 'multi-single':
     predictions = predictions.split(pred_sep)
     targets = [a for ans in targets.split(ans_sep) for a in ans.split(alias_sep)]
-    score = np.max([exact_match_score(p, t) for t in targets for p in predictions])
+    score = np.max([score_fn(p, t) for t in targets for p in predictions])
     return score
   elif eval_mode == 'single-single':
     targets = set(targets.split(alias_sep)) - {''}
-    score = np.max([exact_match_score(predictions, t) for t in targets])
+    score = np.max([score_fn(predictions, t) for t in targets])
     return score
 
 
@@ -813,6 +814,33 @@ def implicit2normalmultitask(source_file, target_file, output_source_file, outpu
         tfout.write(t)
 
 
+def get_follow_uq(source_file: str, target_file: str, file_out: str, num_hop: int=2, which: int=0, pred_file: str=None):
+  pred_file = pred_file or source_file
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
+    open(pred_file, 'r') as pfin, open(file_out, 'w') as fout:
+    count = 0
+    for i, s in enumerate(sfin):
+      s = s.rstrip('\n')
+      t = tfin.readline().rstrip('\n')
+      t = join_sep.join([ans.split(alias_sep)[0] for ans in t.split(ans_sep)])
+      if i % (num_hop + 1) == which:
+        if which == 1:
+          p = pfin.readline().rstrip('\n')
+          p = p.replace(join_sep, inplace_join_sep)
+          s = s.replace('#1', p)
+        fout.write('{}\t{}\t{}\t{}\n'.format(count, s, t, 0))
+        count += 1
+
+
+def combine_first_second(pred_file1, pred_file2, file_out):
+  with open(pred_file1, 'r') as p1fin, open(pred_file2, 'r') as p2fin, open(file_out, 'w') as fout:
+    for i, p1 in enumerate(p1fin):
+      p2 = p2fin.readline()
+      fout.write(p1)
+      fout.write(p2)
+      fout.write('\n')
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -825,7 +853,8 @@ if __name__ == '__main__':
     'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq',
     'eval_json', 'consistency_data', 'explicit_data', 'implicit_data',
     'implicit_data_with_explicit', 'implicit_data_with_normal', 'normal_data_with_explicit',
-    '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop', 'implicit2normalmultitask'], default='hotpotqa')
+    '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop', 'implicit2normalmultitask',
+    'get_follow_uq_first', 'get_follow_uq_second', 'combine_first_second', 'break2normal_format'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1729,6 +1758,31 @@ if __name__ == '__main__':
     out_target_file = target_file + '.{}_2hop'.format(count)
     gen_multi_2hop(source_file, target_file, pred_file, out_source_file, out_target_file, raw_count=50, out_count=count)
 
+  elif args.task == 'get_follow_uq_first':
+    source_file, target_file = args.input
+    file_out = args.output
+    get_follow_uq(source_file, target_file, file_out, which=0)
+
+  elif args.task == 'get_follow_uq_second':
+    source_file, target_file, pred_file = args.input
+    file_out = args.output
+    get_follow_uq(source_file, target_file, file_out, which=1, pred_file=pred_file)
+
+  elif args.task == 'combine_first_second':
+    pred_file1, pred_file2 = args.input
+    file_out = args.output
+    combine_first_second(pred_file1, pred_file2, file_out)
+
+  elif args.task == 'break2normal_format':
+    break_file, = args.input
+    file_out = args.output
+    with open(break_file, 'r') as fin, open(file_out, 'w') as fout:
+      d = json.load(fin)
+      for k, v in d.items():
+        fout.write('{}\n'.format(v['decomposition_prediction'][0]))
+        fout.write('{}\n'.format(v['decomposition_prediction'][1]))
+        fout.write('\n')
+
   elif args.task == 'ana_reducehop':
     json_file, raw_pred_file = args.input
     ana_reducehop(json_file, raw_pred_file)
@@ -1743,3 +1797,32 @@ if __name__ == '__main__':
     new_source_file, new_target_file, new_id_file = \
       source_file + '.{}'.format(sample_count), target_file + '.{}'.format(sample_count), id_file + '.{}'.format(sample_count)
     sample_subset(source_file, target_file, id_file, new_source_file, new_target_file, new_id_file, inter, samples)
+
+def is_same(file1, file2, target_file, which: int=0, num_hop: int=2):
+  p1s = []
+  p2s = []
+  ts = []
+  with open(file1, 'r') as fin1, open(file2, 'r') as fin2, open(target_file, 'r') as tfin:
+    for i, f1 in enumerate(fin1):
+      p1 = f1.strip().split('\t')[0]
+      p2 = fin2.readline().strip().split('\t')[0]
+      t = tfin.readline().strip()
+      p1s.append(p1)
+      p2s.append(p2)
+      ts.append(t)
+  p1s = p1s[1:len(p1s):3]
+  p2s = p2s[2:len(p2s):3]
+  ts = ts[2:len(ts):3]
+  same = []
+  ems = []
+  em1s = []
+  em2s = []
+  for p1, p2, t in zip(p1s, p2s, ts):
+    em1 = evaluation(p1, t, 'multi-multi')
+    em2 = evaluation(p2, t, 'multi-multi')
+    if not em1 or not em2:
+      same.append(sorted(set(p1.split(join_sep))) == sorted(set(p2.split(join_sep))))
+    ems.append(em1 and em2)
+    em1s.append(em1)
+    em2s.append(em2)
+  return np.mean(same), np.mean(ems), np.mean(em1s), np.mean(em2s)

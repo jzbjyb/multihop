@@ -11,13 +11,14 @@ export PYTHONPATH="../":"${PYTHONPATH}"
 
 DATA_DIR=$1  # /home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa/full_qa_small
 MODEL_NAME_OR_PATH=facebook/rag-sequence-nq # facebook/rag-sequence-nq
-MODEL2=models_more/cwq_hotpotqa/rag_ssm_explicit/checkpoint11
+MODEL2=models_more/cwq_goldneg/rag_ssm_explicit/checkpoint11
 max_combined_length=512
-max_target_length=25
+max_target_length=128
 n_docs=1
 mode=no
 consistency_loss=$2
 distance=$3
+multitask=no
 hop=1
 OUTPUT_DIR=$4  # models/rag_combine
 gpus=$5
@@ -60,4 +61,5 @@ CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --max_combined_length ${max_combined_length} \
     --distributed-port ${port} \
     --consistency_loss ${consistency_loss} \
-    --distance ${distance}
+    --distance ${distance} \
+    --multitask ${multitask}
