@@ -624,7 +624,7 @@ def main(args):
                 domains = source_files[0:len(source_files):2]
                 source_files = source_files[1:len(source_files):2]
                 target_files = args.gold_data_path.split(':')
-                break_dataset = PseudoBreak(domains, list(zip(source_files, target_files)), num_hop=num_hop, has_multihop=True)
+                break_dataset = PseudoBreak(domains, list(zip(source_files, target_files)), num_hop=num_hop, has_multihop=has_multihop)
             for nh in list(range(break_dataset.max_hop)) + eval_multi:
                 id2q = break_dataset.get_hop_n(nh, use_prediction=use_prediction, has_ret=has_ret, split=split)
                 print('--- {} with {} questions ---'.format(nh, len(id2q)))
