@@ -11,6 +11,7 @@ import truecase
 from tqdm import tqdm
 import os
 import csv
+import html
 import matplotlib.pyplot as plot
 from dataset import Break, HoptopQA, WebQuestion, ComplexWebQuestion, SlingExtractor, MultihopQuestion, GraphQuestion
 from rag.utils_rag import exact_match_score, f1_score
@@ -40,9 +41,11 @@ numhops2temps: Dict[int, List[str]] = {
 i2ph = {0: 'XXX', 1: 'YYY', 2: 'ZZZ', 3: 'AAA', 4: 'BBB', 5: 'CCC', 6: 'DDD', 7: 'EEE', 8: 'FFF', 9: 'GGG', 10: 'HHH'}
 
 
-def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score):
+def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score, remove_dup: bool=False):
   if eval_mode == 'multi-multi':
     predictions = predictions.split(pred_sep)
+    if remove_dup:
+      predictions = list(set(predictions))
     targets = [ans.split(alias_sep) for ans in targets.split(ans_sep)]
     if len(targets) > 1:
       eval_stat['multi'][-1] += 1
@@ -841,6 +844,88 @@ def combine_first_second(pred_file1, pred_file2, file_out):
       fout.write('\n')
 
 
+def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file=None, which: int=0, num_hop: int=2, se: SlingExtractor=None):
+  def get_major_type(names: List[str]):
+    t2c = defaultdict(lambda: 0)
+    for name in names:
+      t = se.get_type_from_surface(name)
+      if t:
+        t2c[t] += 1
+    t2c = sorted(t2c.items(), key=lambda x: -x[1])
+    if len(t2c) > 0:
+      return t2c[0][0]
+    return None
+  pfs = []
+  pes = []
+  ss = []
+  ts = []
+  with open(follow_file, 'r') as ffin, open(e2e_file, 'r') as efin, \
+    open(source_file, 'r') as sfin, open(target_file, 'r') as tfin:
+    for i, f1 in enumerate(ffin):
+      pf = f1.strip().split('\t')[0]
+      pe = efin.readline().strip().split('\t')[0]
+      s = sfin.readline().strip()
+      t = tfin.readline().strip()
+      pfs.append(pf)
+      pes.append(pe)
+      ss.append(s)
+      ts.append(t)
+  p1s = pfs[0:len(pfs):3]
+  p2s = pfs[1:len(pfs):3]
+  pms = pes[2:len(pes):3]
+  s1s = ss[0:len(ss):3]
+  s2s = ss[1:len(ss):3]
+  sms = ss[2:len(ss):3]
+  t1s = ts[0:len(ts):3]
+  tms = ts[2:len(ts):3]
+  sames = []
+  ems = []
+  f_ems = []
+  e_ems = []
+  key2cases = defaultdict(list)
+  for p1, p2, pm, s1, s2, sm, t1, tm in zip(p1s, p2s, pms, s1s, s2s, sms, t1s, tms):
+    f_em = evaluation(p2, tm, 'multi-multi')
+    e_em = evaluation(pm, tm, 'multi-multi')
+    p2sp = set(p2.split(join_sep))
+    pmsp = set(pm.split(join_sep))
+    same = p2sp == pmsp
+    tm_type = get_major_type([a for ans in tm.split(ans_sep) for a in ans.split(alias_sep)])
+    p2_type = get_major_type(p2sp)
+    pm_type = get_major_type(pmsp)
+    if tm_type and p2_type and pm_type:
+      type_agree = '{}{}'.format(int(tm_type == p2_type), int(tm_type == pm_type))
+    else:
+      type_agree = '*'
+    key = '{}-{}-{}-{}{}-{}'.format(int(f_em), int(e_em), int(same), int(len(p2sp) > 1), int(len(pmsp) > 1), type_agree)
+    key2cases[key].append((s1, s2, sm, p1, p2, pm, t1, tm))
+    sames.append(same)
+    ems.append(f_em and e_em)
+    f_ems.append(f_em)
+    e_ems.append(e_em)
+  if out_file:
+    with open(out_file, 'w') as fout:
+      for key, cases in key2cases.items():
+        fout.write('<h1>Key: {}</h1>\n'.format(key))
+        shuffle(cases)
+        for case in cases[:100]:
+          case = [html.escape(i) for i in case]
+          s1, s2, sm, p1, p2, pm, t1, tm = case
+          fout.write('<div>--> hop1: {}</div>\n'.format(s1))
+          fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(t1))
+          fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(p1))
+          fout.write('<div>--> hop2: {}</div>\n'.format(s2))
+          fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(tm))
+          fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(p2))
+          fout.write('<div>--> multihop: {}</div>\n'.format(sm))
+          fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(tm))
+          fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(pm))
+          fout.write('<hr>\n')
+  print('consist {}, all em {}, follow em {}, e2e em {}'.format(
+    np.mean(sames), np.mean(ems), np.mean(f_ems), np.mean(e_ems)))
+  for key in sorted(key2cases.keys()):
+    print(key, len(key2cases[key]))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -854,7 +939,8 @@ if __name__ == '__main__':
     'eval_json', 'consistency_data', 'explicit_data', 'implicit_data',
     'implicit_data_with_explicit', 'implicit_data_with_normal', 'normal_data_with_explicit',
     '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop', 'implicit2normalmultitask',
-    'get_follow_uq_first', 'get_follow_uq_second', 'combine_first_second', 'break2normal_format'], default='hotpotqa')
+    'get_follow_uq_first', 'get_follow_uq_second', 'combine_first_second', 'break2normal_format',
+    'compare_e2e_follow'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1798,31 +1884,9 @@ if __name__ == '__main__':
       source_file + '.{}'.format(sample_count), target_file + '.{}'.format(sample_count), id_file + '.{}'.format(sample_count)
     sample_subset(source_file, target_file, id_file, new_source_file, new_target_file, new_id_file, inter, samples)
 
-def is_same(file1, file2, target_file, which: int=0, num_hop: int=2):
-  p1s = []
-  p2s = []
-  ts = []
-  with open(file1, 'r') as fin1, open(file2, 'r') as fin2, open(target_file, 'r') as tfin:
-    for i, f1 in enumerate(fin1):
-      p1 = f1.strip().split('\t')[0]
-      p2 = fin2.readline().strip().split('\t')[0]
-      t = tfin.readline().strip()
-      p1s.append(p1)
-      p2s.append(p2)
-      ts.append(t)
-  p1s = p1s[1:len(p1s):3]
-  p2s = p2s[2:len(p2s):3]
-  ts = ts[2:len(ts):3]
-  same = []
-  ems = []
-  em1s = []
-  em2s = []
-  for p1, p2, t in zip(p1s, p2s, ts):
-    em1 = evaluation(p1, t, 'multi-multi')
-    em2 = evaluation(p2, t, 'multi-multi')
-    if not em1 or not em2:
-      same.append(sorted(set(p1.split(join_sep))) == sorted(set(p2.split(join_sep))))
-    ems.append(em1 and em2)
-    em1s.append(em1)
-    em2s.append(em2)
-  return np.mean(same), np.mean(ems), np.mean(em1s), np.mean(em2s)
+  elif args.task == 'compare_e2e_follow':
+    se = SlingExtractor()
+    se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
+    follow_file, e2e_file, source_file, target_file = args.input
+    out_file = args.output
+    compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file, se=se)

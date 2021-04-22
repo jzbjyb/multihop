@@ -149,6 +149,13 @@ class SlingExtractor(object):
     return None
 
 
+  def get_type_from_surface(self, name) -> str:
+    entities = self.phrase.lookup(name)
+    if len(entities) <= 0:
+      return None
+    return self.get_type(entities[0].id)
+
+
   def get_name(self, wid) -> str:
     return self.kb[wid].name
 
