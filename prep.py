@@ -844,8 +844,10 @@ def combine_first_second(pred_file1, pred_file2, file_out):
       fout.write('\n')
 
 
-def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file=None, which: int=0, num_hop: int=2, se: SlingExtractor=None):
+def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file=None, skip: int=0, num_hop: int=2, se: SlingExtractor=None):
   def get_major_type(names: List[str]):
+    if se is None:
+      return None
     t2c = defaultdict(lambda: 0)
     for name in names:
       t = se.get_type_from_surface(name)
@@ -864,6 +866,9 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
     for i, f1 in enumerate(ffin):
       pf = f1.strip().split('\t')[0]
       pe = efin.readline().strip().split('\t')[0]
+      if i % (num_hop + 1) == num_hop and skip:
+        for _ in range(skip):
+          _ = efin.readline()
       s = sfin.readline().strip()
       t = tfin.readline().strip()
       pfs.append(pf)
@@ -898,10 +903,11 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
       type_agree = '*'
     key = '{}-{}-{}-{}{}-{}'.format(int(f_em), int(e_em), int(same), int(len(p2sp) > 1), int(len(pmsp) > 1), type_agree)
     key2cases[key].append((s1, s2, sm, p1, p2, pm, t1, tm))
-    sames.append(same)
     ems.append(f_em and e_em)
     f_ems.append(f_em)
     e_ems.append(e_em)
+    if not f_em or not e_em:
+      sames.append(same)
   if out_file:
     with open(out_file, 'w') as fout:
       for key, cases in key2cases.items():
@@ -1885,8 +1891,9 @@ if __name__ == '__main__':
     sample_subset(source_file, target_file, id_file, new_source_file, new_target_file, new_id_file, inter, samples)
 
   elif args.task == 'compare_e2e_follow':
-    se = SlingExtractor()
-    se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
+    #se = SlingExtractor()
+    #se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
+    se = None
     follow_file, e2e_file, source_file, target_file = args.input
     out_file = args.output
-    compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file, se=se)
+    compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file, se=se, skip=0)
