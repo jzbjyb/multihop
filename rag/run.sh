@@ -14,6 +14,7 @@ out=$6  # hotpotqa/dev_select_project.pred
 num_beams=1
 batch_size=128
 
+add=''
 if [[ ${mode} == 'e2e' ]]; then
     ndocs=5
     max_source_length=128
@@ -26,6 +27,10 @@ elif [[ ${mode} == 'pseudo_break' ]]; then
 elif [[ ${mode} == 'e2ec' ]]; then
     ndocs=1
     max_source_length=512
+elif [[ ${mode} == 'e2ec_nq' ]]; then
+    ndocs=1
+    max_source_length=512
+    add='--no_question'
 elif [[ ${mode} == 'retrieval_all' ]]; then
     ndocs=100
     max_source_length=128
@@ -54,4 +59,4 @@ CUDA_VISIBLE_DEVICES=${gpu} proxychains4 python eval_rag.py \
     --max_source_length ${max_source_length} \
     --eval_batch_size ${batch_size} \
     --print_predictions \
-    --recalculate &> ${out}.out
+    --recalculate ${add} &> ${out}.out

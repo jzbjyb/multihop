@@ -30,6 +30,7 @@ join_sep = ' # '
 inplace_join_sep = ', '
 alias_sep = '\t'
 ans_sep = '\t\t'
+path_sep = ' -> '
 
 
 numhops2temps: Dict[int, List[str]] = {
@@ -39,10 +40,14 @@ numhops2temps: Dict[int, List[str]] = {
   #2: ['n-*', '*-n', 'n-n', '*']
 }
 i2ph = {0: 'XXX', 1: 'YYY', 2: 'ZZZ', 3: 'AAA', 4: 'BBB', 5: 'CCC', 6: 'DDD', 7: 'EEE', 8: 'FFF', 9: 'GGG', 10: 'HHH'}
+skip_ner_types = {'DATE', 'TIME', 'PERCENT', 'MONEY', 'QUANTITY', 'ORDINAL', 'CARDINAL'}
+ner_type2wiki_type = {}
 
 
-def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score, remove_dup: bool=False):
+def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score, remove_dup: bool=False, path: bool=True):
   if eval_mode == 'multi-multi':
+    if path:
+      predictions = predictions.split(path_sep)[-1]
     predictions = predictions.split(pred_sep)
     if remove_dup:
       predictions = list(set(predictions))
@@ -844,7 +849,7 @@ def combine_first_second(pred_file1, pred_file2, file_out):
       fout.write('\n')
 
 
-def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file=None, skip: int=0, num_hop: int=2, se: SlingExtractor=None):
+def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file=None, skip: int=0, num_hop: int=2, se: SlingExtractor=None, path: bool=True):
   def get_major_type(names: List[str]):
     if se is None:
       return None
@@ -889,8 +894,12 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
   e_ems = []
   key2cases = defaultdict(list)
   for p1, p2, pm, s1, s2, sm, t1, tm in zip(p1s, p2s, pms, s1s, s2s, sms, t1s, tms):
+    f1_em = evaluation(p1, t1, 'multi-multi')
     f_em = evaluation(p2, tm, 'multi-multi')
-    e_em = evaluation(pm, tm, 'multi-multi')
+    if path:
+      e_em = evaluation(pm.split(path_sep)[-1], tm, 'multi-multi')
+    else:
+      e_em = evaluation(pm, tm, 'multi-multi')
     p2sp = set(p2.split(join_sep))
     pmsp = set(pm.split(join_sep))
     same = p2sp == pmsp
@@ -902,34 +911,132 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
     else:
       type_agree = '*'
     key = '{}-{}-{}-{}{}-{}'.format(int(f_em), int(e_em), int(same), int(len(p2sp) > 1), int(len(pmsp) > 1), type_agree)
-    key2cases[key].append((s1, s2, sm, p1, p2, pm, t1, tm))
+    key2cases[key].append((s1, s2, sm, p1, p2, pm, t1, tm, f1_em, f_em, e_em, same))
     ems.append(f_em and e_em)
     f_ems.append(f_em)
     e_ems.append(e_em)
     if not f_em or not e_em:
       sames.append(same)
   if out_file:
+    ind = 0
     with open(out_file, 'w') as fout:
       for key, cases in key2cases.items():
-        fout.write('<h1>Key: {}</h1>\n'.format(key))
-        shuffle(cases)
-        for case in cases[:100]:
-          case = [html.escape(i) for i in case]
-          s1, s2, sm, p1, p2, pm, t1, tm = case
-          fout.write('<div>--> hop1: {}</div>\n'.format(s1))
-          fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(t1))
-          fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(p1))
-          fout.write('<div>--> hop2: {}</div>\n'.format(s2))
-          fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(tm))
-          fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(p2))
-          fout.write('<div>--> multihop: {}</div>\n'.format(sm))
-          fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(tm))
-          fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(pm))
-          fout.write('<hr>\n')
+        if out_file.endswith('.html'):
+          fout.write('<h1>Key: {}</h1>\n'.format(key))
+          shuffle(cases)
+          for case in cases[:100]:
+            case = [html.escape(i) for i in case]
+            s1, s2, sm, p1, p2, pm, t1, tm, f1_em, f_em, e_em, same = case
+            fout.write('<div>--> hop1: {}</div>\n'.format(s1))
+            fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(t1))
+            fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(p1))
+            fout.write('<div>--> hop2: {}</div>\n'.format(s2))
+            fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(tm))
+            fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(p2))
+            fout.write('<div>--> multihop: {}</div>\n'.format(sm))
+            fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(tm))
+            fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(pm))
+            fout.write('<hr>\n')
+        elif out_file.endswith('.txt'):
+          fout.write('index\thop\tquestion\tcontext_title\tcontext_body\tgold\tprediction\tcorrect\tconsistent\n')
+          for case in cases:
+            s1, s2, sm, p1, p2, pm, t1, tm, f1_em, f_em, e_em, same = case
+            t1 = join_sep.join([x.strip() for x in t1.split('\t') if len(x.strip()) > 0])
+            tm = join_sep.join([x.strip() for x in tm.split('\t') if len(x.strip()) > 0])
+            fout.write('{}\thop1\t{}\t{}\t{}\t{}\t{}\n'.format(ind, s1, t1, p1, f1_em, same))
+            fout.write('{}\thop2\t{}\t{}\t{}\t{}\t{}\n'.format(ind, s2, tm, p2, f_em, same))
+            fout.write('{}\tmultihop\t{}\t{}\t{}\t{}\t{}\n'.format(ind, sm, tm, pm, e_em, same))
+            ind += 1
+        else:
+          raise NotImplementedError
   print('consist {}, all em {}, follow em {}, e2e em {}'.format(
     np.mean(sames), np.mean(ems), np.mean(f_ems), np.mean(e_ems)))
   for key in sorted(key2cases.keys()):
     print(key, len(key2cases[key]))
+
+
+def only_firstsecond_context(source_file, out_first_file, out_second_file, num_hop: int=2):
+  prev = []
+  with open(source_file, 'r') as fin, open(out_first_file, 'w') as ffout, open(out_second_file, 'w') as sfout:
+    for i, s in enumerate(fin):
+      if i % (num_hop + 1) != num_hop:  # single hop
+        ffout.write(s)
+        sfout.write(s)
+        prev.append(s)
+      else:
+        q = s.split('\t')[0]
+        fc = prev[-2].rstrip().split('\t')[1:3]
+        sc = prev[-1].rstrip().split('\t')[1:3]
+        ffout.write('\t'.join([q] + fc) + '\n')
+        sfout.write('\t'.join([q] + sc) + '\n')
+
+
+def generate_fake_statement(source_file, target_file, out_file, se, nlp, num_hop: int=2):
+  def replace_entity(text, tp=None):
+    qids = se.phrase.lookup(text)
+    if len(qids) <= 0:
+      if tp not in ner_type2wiki_type:
+        raise Exception('no el {} of type {}'.format(text, tp))
+      new_qid = se.type2entities[ner_type2wiki_type[tp]][0]
+    else:
+      qid = qids[0].id
+      new_qid = se.type2entities[se.get_type_corse(qid)][0]
+      assert qid != new_qid, 'the same entity {} {}'.format(qid, new_qid)
+    new_text = se.get_name(new_qid)
+    return new_text
+
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(out_file, 'w') as fout:
+    all_count = count = 0
+    for i, s in tqdm(enumerate(sfin)):
+      q = s.strip().split('\t')[0]
+      t = tfin.readline().strip()
+      t = [ans.split(alias_sep)[0] for ans in t.split(ans_sep)]
+      if i % (num_hop + 1) == num_hop:
+        all_count += 1
+        # replace entity in question
+        doc = nlp(q)
+        ents = [(ent.text, ent.start_char, ent.end_char, ent.label_) for ent in doc.ents if ent.label_ not in skip_ner_types]
+        ents = sorted(ents, key=lambda x: x[1])
+        prev_ind = 0
+        new_q = []
+        for text, st, ed, tp in ents:
+          new_q.append(q[prev_ind:st])
+          prev_ind = ed
+          try:
+            new_text = replace_entity(text, tp)
+            new_q.append(new_text)
+          except KeyboardInterrupt as e:
+            raise e
+          except:
+            new_q.append(text)
+        new_q.append(q[prev_ind:])
+        new_q = ''.join(new_q)
+        if new_q == q:
+          fout.write('\n')
+          continue
+        new_q = se.question2statement_parse(new_q, keep_ph=True)
+        if new_q is None:
+          fout.write('\n')
+          continue
+        # replace entity in answers
+        nt = []
+        for ans in t:
+          try:
+            new_ans = replace_entity(ans)
+          except:
+            continue
+          if new_ans == ans:
+            continue
+          nt.append(new_ans)
+        if len(nt) <= 0:
+          fout.write('\n')
+          continue
+        new_q = new_q.replace('**blank**', nt[0])  # only use one answer
+        fout.write('{}\n'.format(new_q))
+        count += 1
+      else:
+        fout.write('\n')
+  print('{} out of {}'.format(count, all_count))
 
 
 if __name__ == '__main__':
@@ -946,7 +1053,8 @@ if __name__ == '__main__':
     'implicit_data_with_explicit', 'implicit_data_with_normal', 'normal_data_with_explicit',
     '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop', 'implicit2normalmultitask',
     'get_follow_uq_first', 'get_follow_uq_second', 'combine_first_second', 'break2normal_format',
-    'compare_e2e_follow'], default='hotpotqa')
+    'compare_e2e_follow', 'only_firstsecond_context', 'generate_fake_statement',
+    'combine_context' ,'get_path_data'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1144,6 +1252,7 @@ if __name__ == '__main__':
     if 'op' in add_file:
       addtion_res = lambda x: x
 
+    prev_targets = []
     with open(pred_file, 'r') as pfin, \
       open(source_file, 'r') as sfin, \
       open(target_file, 'r') as tfin, \
@@ -1162,6 +1271,7 @@ if __name__ == '__main__':
         source = sfin.readline().strip()
         score = scorefin.readline().strip().split('\t')
         targets = tfin.readline().rstrip('\n')
+        prev_targets.append(targets)
         if (i // args.num_para) % len(numhops2temps[args.num_hops]) >= args.num_hops + 1:
           pass  # use previous addition
         else:
@@ -1182,6 +1292,7 @@ if __name__ == '__main__':
           else:
             cates.append('')
         if (i // args.num_para) % len(numhops2temps[args.num_hops]) == args.num_hops:  # multihop
+          #if len(source.split('\t')) == 4:
           ems_first_mh.append(em)
         elif (i // args.num_para) % len(numhops2temps[args.num_hops]) < args.num_hops:  # singlehop
           ems_first_sh.append(em)
@@ -1287,7 +1398,6 @@ if __name__ == '__main__':
   elif args.task == 'ner_replace':
     nlp = spacy.load('en_core_web_sm')
     batch_size = 5000
-    skip_ner_types = {'DATE', 'TIME', 'PERCENT', 'MONEY', 'QUANTITY', 'ORDINAL', 'CARDINAL'}
 
     def process_batch(li, fout):
       docs = list(nlp.pipe(li, disable=['parser']))
@@ -1897,3 +2007,48 @@ if __name__ == '__main__':
     follow_file, e2e_file, source_file, target_file = args.input
     out_file = args.output
     compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file, se=se, skip=0)
+
+  elif args.task == 'only_firstsecond_context':
+    source_file, = args.input
+    out_first_file = source_file + '.firstcontext'
+    out_second_file = source_file + '.secondcontext'
+    only_firstsecond_context(source_file, out_first_file, out_second_file)
+
+  elif args.task == 'generate_fake_statement':
+    source_file, = args.input
+    out_file = args.output
+    se = SlingExtractor()
+    se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
+    os.environ['STANFORD_HOME'] = '/home/zhengbaj/tir4/stanford'
+    se.load_stanford_nlp()
+    se.build_type2entities(maxrange=1000000)
+    nlp = spacy.load('en_core_web_sm')
+    generate_fake_statement(source_file, out_file, se, nlp)
+
+  elif args.task == 'combine_context':
+    source_file, context_file = args.input
+    out_file = args.output
+    with open(source_file, 'r') as sfin, open(context_file, 'r') as cfin, open(out_file, 'w') as fout:
+      for i, s in enumerate(sfin):
+        s = s.rstrip('\n')
+        c = cfin.readline().strip()
+        if len(c) > 0 and not c.endswith('.'):
+          c = c + '.'
+        s = s.split('\t')
+        s = '\t'.join([s[0], s[1], s[2], c])
+        fout.write('{}\n'.format(s))
+
+  elif args.task == 'get_path_data':
+    target_file, = args.input
+    out_file = args.output
+    inter = 5
+    active = {2, 4}
+    with open(target_file, 'r') as fin, open(out_file, 'w') as fout:
+      prev = None
+      for i, t in enumerate(fin):
+        t = t.rstrip('\n')
+        if i % inter == 0:
+          prev = t
+        elif i % inter in active:
+          t = '{} -> {}'.format(prev, t)
+        fout.write('{}\n'.format(t))

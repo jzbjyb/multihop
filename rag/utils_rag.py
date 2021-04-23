@@ -65,6 +65,7 @@ class Seq2SeqDataset(Dataset):
         tgt_lang=None,
         prefix="",
         only_question_for_input2=False,
+        no_question=False,
     ):
         super().__init__()
         self.src_file = Path(data_dir).joinpath(type_path + ".source")
@@ -82,6 +83,7 @@ class Seq2SeqDataset(Dataset):
         self.title_sep = ' / '
         self.doc_sep = ' // '
         self.only_question_for_input2 = only_question_for_input2
+        self.no_question = no_question
 
     def __len__(self):
         return len(self.src_lens)
@@ -96,7 +98,7 @@ class Seq2SeqDataset(Dataset):
             if len(sp) == 3:  # one example
                 q, title, text = sp
                 source_line = truncate_context_with_question(
-                    title + self.title_sep + text, q, max_length=self.max_source_length) + self.doc_sep + q
+                    title + self.title_sep + text, q, max_length=self.max_source_length) + self.doc_sep + ('A: ' if self.no_question else q)
             elif len(sp) == 4:  # two examples
                 q1, q2, title, text = sp
                 source_line = truncate_context_with_question(

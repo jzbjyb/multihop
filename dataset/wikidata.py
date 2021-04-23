@@ -149,6 +149,29 @@ class SlingExtractor(object):
     return None
 
 
+  def get_type_corse(self, wid) -> str:
+    ps = dict(self.iter_property(wid))
+    for type_prop in ['P31', 'P279']:
+      if type_prop in ps:
+        try:
+          return self.kb[ps[type_prop][-1]].name
+        except:
+          pass
+    return None
+
+
+  def build_type2entities(self, maxrange: int):
+    self.type2entities: Dict[str, List[str]] = defaultdict(list)
+    for id in tqdm(range(maxrange)):
+      id = 'Q{}'.format(id)
+      if self.kb[id] is None:
+        continue
+      type = self.get_type(id)
+      if type is None:
+        continue
+      self.type2entities[type].append(id)
+
+
   def get_type_from_surface(self, name) -> str:
     entities = self.phrase.lookup(name)
     if len(entities) <= 0:

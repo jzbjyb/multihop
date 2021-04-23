@@ -304,9 +304,19 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
         score = 0.0
         if len(qtd) in {3, 4}:
             q, ct, cd = qtd[:3]
-            score = float(qtd[3]) if len(qtd) > 3 else 0.0
-            ct = ct.strip('"')
-            text = truncate_context_with_question(ct + rag_model.config.title_sep + cd, q, max_length=args.max_source_length) + rag_model.config.doc_sep + q
+            try:
+                score = float(qtd[3]) if len(qtd) > 3 else 0.0
+                ct = ct.strip('"')
+                text = truncate_context_with_question(
+                    ct + rag_model.config.title_sep + cd, q, max_length=args.max_source_length) \
+                       + rag_model.config.doc_sep + ('A: ' if args.no_question else q)
+            except:
+                score = 0.0
+                add_context = qtd[3]
+                ct = ct.strip('"')
+                text = truncate_context_with_question(
+                    ct + rag_model.config.title_sep + add_context + ' ' + cd, q, max_length=args.max_source_length) \
+                       + rag_model.config.doc_sep + ('A: ' if args.no_question else q)
             return text.replace("  ", " "), score
         if len(qtd) == 1:
             return qtd[0].replace("  ", " "), score
@@ -378,7 +388,7 @@ def get_args():
     )
     parser.add_argument(
         "--eval_mode",
-        choices=["e2e", "retrieval", "e2ec", "break", "pseudo_break", "retrieval_all"],
+        choices=["e2e", "retrieval", "e2ec", "e2ec_nq", "break", "pseudo_break", "retrieval_all"],
         default="e2e",
         type=str,
         help="Evaluation mode, e2e calculates exact match and F1 of the downstream task, retrieval calculates precision@k.",
@@ -389,6 +399,7 @@ def get_args():
         default=1
     )
     parser.add_argument('--use_mdr', action='store_true')
+    parser.add_argument('--no_question', action='store_true')
     parser.add_argument("--k", default=1, type=int, help="k for the precision@k calculation")
     parser.add_argument(
         "--evaluation_set",
@@ -555,7 +566,7 @@ def main(args):
     if args.eval_mode == "e2e":
         evaluate_batch_fn = evaluate_batch_e2e_multihop_retrieval
         score_fn = get_scores
-    elif args.eval_mode == 'e2ec':
+    elif args.eval_mode in {'e2ec', 'e2ec_nq'}:
         evaluate_batch_fn = evaluate_batch_e2e_with_context
         score_fn = get_scores
     elif args.eval_mode == 'break':
@@ -582,7 +593,7 @@ def main(args):
         logger.info("  Predictions will be stored under {}".format(args.predictions_path))
 
         if args.model_type.startswith("rag"):
-            if args.eval_mode in {'e2ec', 'pseudo_break'}:
+            if args.eval_mode in {'e2ec', 'e2ec_nq', 'pseudo_break'}:
                 retriever = RagRetriever.from_pretrained('facebook/rag-sequence-nq', index_name="exact", use_dummy_dataset=True)
             else:
                 if args.use_mdr:

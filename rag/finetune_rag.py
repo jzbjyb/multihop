@@ -254,6 +254,7 @@ class GenerativeQAModule(BaseTransformer):
             max_source_length=self.hparams.max_source_length,
             prefix=prefix or "",
             only_question_for_input2=self.multitask != 'no',
+            no_question=hparams.no_question,
         )
         n_observations_per_split = {
             "train": self.hparams.n_train,
@@ -834,6 +835,7 @@ class GenerativeQAModule(BaseTransformer):
         parser.add_argument('--consistency_loss', type=str, choices=['no', 'combine', 'only'], default='no')
         parser.add_argument('--multitask', type=str, default='no')
         parser.add_argument('--distance', type=str, choices=['jsd', 'kl'], default='jsd')
+        parser.add_argument('--no_question', action='store_true')
         return parser
 
     @staticmethod
