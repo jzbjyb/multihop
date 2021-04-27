@@ -971,20 +971,57 @@ def only_firstsecond_context(source_file, out_first_file, out_second_file, num_h
         sfout.write('\t'.join([q] + sc) + '\n')
 
 
-def generate_fake_statement(source_file, target_file, out_file, se, nlp, num_hop: int=2):
-  def replace_entity(text, tp=None):
-    qids = se.phrase.lookup(text)
-    if len(qids) <= 0:
-      if tp not in ner_type2wiki_type:
-        raise Exception('no el {} of type {}'.format(text, tp))
-      new_qid = se.type2entities[ner_type2wiki_type[tp]][0]
-    else:
-      qid = qids[0].id
-      new_qid = se.type2entities[se.get_type_corse(qid)][0]
-      assert qid != new_qid, 'the same entity {} {}'.format(qid, new_qid)
-    new_text = se.get_name(new_qid)
-    return new_text
+def replace_entity(text, se, tp=None):
+  qids = se.phrase.lookup(text)
+  if len(qids) <= 0:
+    if tp not in ner_type2wiki_type:
+      raise Exception('no el {} of type {}'.format(text, tp))
+    new_qid = se.type2entities[ner_type2wiki_type[tp]][0]
+  else:
+    qid = qids[0].id
+    new_qid = se.type2entities[se.get_type_corse(qid)][0]
+    assert qid != new_qid, 'the same entity {} {}'.format(qid, new_qid)
+  new_text = se.get_name(new_qid)
+  return new_text
 
+
+def generate_negative_passage(source_file, out_file, se, nlp):
+  with open(source_file, 'r') as sfin, open(out_file, 'w') as fout:
+    all_count = count = 0
+    for i, s in tqdm(enumerate(sfin)):
+      all_count += 1
+      q, title, body = s.strip().split('\t')
+      body_title = []
+      # replace entity in body, title
+      for raw in [body, title]:
+        doc = nlp(raw)
+        ents = [(ent.text, ent.start_char, ent.end_char, ent.label_) for ent in doc.ents if ent.label_ not in skip_ner_types]
+        ents = sorted(ents, key=lambda x: x[1])
+        prev_ind = 0
+        new = []
+        for text, st, ed, tp in ents:
+          new.append(raw[prev_ind:st])
+          prev_ind = ed
+          try:
+            new_text = replace_entity(text, se, tp)
+            new.append(new_text)
+          except KeyboardInterrupt as e:
+            raise e
+          except:
+            new.append(text)
+        new.append(raw[prev_ind:])
+        new = ''.join(new)
+        body_title.append(new)
+      new_body, new_title = body_title
+      if new_body != body:
+        fout.write('{}\t{}\t{}\n'.format(q, '{} -- {}'.format(title, new_title), '{} {}'.format(body, new_body)))
+        count += 1
+      else:
+        fout.write('{}\t{}\t{}\n'.format(q, title, body))
+  print('{} out of {}'.format(count, all_count))
+
+
+def generate_fake_statement(source_file, target_file, out_file, se, nlp, num_hop: int=2):
   with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(out_file, 'w') as fout:
     all_count = count = 0
     for i, s in tqdm(enumerate(sfin)):
@@ -1003,7 +1040,7 @@ def generate_fake_statement(source_file, target_file, out_file, se, nlp, num_hop
           new_q.append(q[prev_ind:st])
           prev_ind = ed
           try:
-            new_text = replace_entity(text, tp)
+            new_text = replace_entity(text, se, tp)
             new_q.append(new_text)
           except KeyboardInterrupt as e:
             raise e
@@ -1022,7 +1059,7 @@ def generate_fake_statement(source_file, target_file, out_file, se, nlp, num_hop
         nt = []
         for ans in t:
           try:
-            new_ans = replace_entity(ans)
+            new_ans = replace_entity(ans, se)
           except:
             continue
           if new_ans == ans:
@@ -1053,8 +1090,8 @@ if __name__ == '__main__':
     'implicit_data_with_explicit', 'implicit_data_with_normal', 'normal_data_with_explicit',
     '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop', 'implicit2normalmultitask',
     'get_follow_uq_first', 'get_follow_uq_second', 'combine_first_second', 'break2normal_format',
-    'compare_e2e_follow', 'only_firstsecond_context', 'generate_fake_statement',
-    'combine_context' ,'get_path_data'], default='hotpotqa')
+    'compare_e2e_follow', 'only_firstsecond_context', 'generate_fake_statement', 'generate_negative_passage',
+    'combine_context', 'get_path_data', 'get_path_data_nq'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -2015,7 +2052,7 @@ if __name__ == '__main__':
     only_firstsecond_context(source_file, out_first_file, out_second_file)
 
   elif args.task == 'generate_fake_statement':
-    source_file, = args.input
+    source_file, target_file = args.input
     out_file = args.output
     se = SlingExtractor()
     se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
@@ -2023,7 +2060,18 @@ if __name__ == '__main__':
     se.load_stanford_nlp()
     se.build_type2entities(maxrange=1000000)
     nlp = spacy.load('en_core_web_sm')
-    generate_fake_statement(source_file, out_file, se, nlp)
+    generate_fake_statement(source_file, target_file, out_file, se, nlp)
+
+  elif args.task == 'generate_negative_passage':
+    source_file = args.input
+    out_file = args.output
+    se = SlingExtractor()
+    se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
+    os.environ['STANFORD_HOME'] = '/home/zhengbaj/tir4/stanford'
+    se.load_stanford_nlp()
+    se.build_type2entities(maxrange=1000000)
+    nlp = spacy.load('en_core_web_sm')
+    generate_negative_passage(source_file, out_file, se, nlp)
 
   elif args.task == 'combine_context':
     source_file, context_file = args.input
@@ -2051,4 +2099,20 @@ if __name__ == '__main__':
           prev = t
         elif i % inter in active:
           t = '{} -> {}'.format(prev, t)
+        fout.write('{}\n'.format(t))
+
+  elif args.task == 'get_path_data_nq':
+    tsv_file, = args.input
+    out_file = args.output
+    inter = 3
+    active = {2}
+    with open(tsv_file, 'r') as fin, open(out_file, 'w') as fout:
+      prev = None
+      for i, t in enumerate(fin):
+        t = t.rstrip('\n')
+        if i % inter == 0:
+          prev = t.split('\t')[2]
+        elif i % inter in active:
+          ts = t.split('\t')
+          t = '{}\t{}\t{} -> {}\t{}'.format(ts[0], ts[1], prev, ts[2], ts[3])
         fout.write('{}\n'.format(t))
