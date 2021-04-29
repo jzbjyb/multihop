@@ -905,6 +905,82 @@ def combine_first_second(pred_file1, pred_file2, file_out):
       fout.write('\n')
 
 
+def consist_compare_four(follow_file1, e2e_file1, follow_file2, e2e_file2, source_file, target_file):
+  pf1s = []
+  pe1s = []
+  pf2s = []
+  pe2s = []
+  ss = []
+  ts = []
+  with open(follow_file1, 'r') as f1fin, open(e2e_file1, 'r') as e1fin,  \
+    open(follow_file2, 'r') as f2fin, open(e2e_file2, 'r') as e2fin, \
+    open(source_file, 'r') as sfin, open(target_file, 'r') as tfin:
+    for i, s in enumerate(sfin):
+      s = s.strip()
+      t = tfin.readline().strip()
+      pf1 = f1fin.readline().strip().split('\t')[0]
+      pe1 = e1fin.readline().strip().split('\t')[0]
+      pf2 = f2fin.readline().strip().split('\t')[0]
+      pe2 = e2fin.readline().strip().split('\t')[0]
+      pf1s.append(pf1)
+      pe1s.append(pe1)
+      pf2s.append(pf2)
+      pe2s.append(pe2)
+      ss.append(s)
+      ts.append(t)
+
+  pf11s = pf1s[0:len(pf1s):3]
+  pf12s = pf1s[1:len(pf1s):3]
+  pe1ms = pe1s[2:len(pe1s):3]
+
+  pf21s = pf2s[0:len(pf2s):3]
+  pf22s = pf2s[1:len(pf2s):3]
+  pe2ms = pe2s[2:len(pe2s):3]
+
+  s1s = ss[0:len(ss):3]
+  s2s = ss[1:len(ss):3]
+  sms = ss[2:len(ss):3]
+  t1s = ts[0:len(ts):3]
+  tms = ts[2:len(ts):3]
+
+  consist1_cases = []
+  consist2_cases = []
+
+  for pf11, pf12, pe1m, pf21, pf22, pe2m, s1, s2, sm, t1, tm in zip(pf11s, pf12s, pe1ms, pf21s, pf22s, pe2ms, s1s, s2s, sms, t1s, tms):
+    pf12sp = set(pf12.lower().split(join_sep))
+    pe1msp = set(pe1m.lower().split(path_sep)[-1].split(join_sep))
+    pf22sp = set(pf22.lower().split(join_sep))
+    pe2msp = set(pe2m.lower().split(path_sep)[-1].split(join_sep))
+    f1_em = evaluation(pf12, tm)
+    f2_em = evaluation(pf22, tm)
+    e1_em = evaluation(pe1m, tm)
+    e2_em = evaluation(pe2m, tm)
+    same1 = (f1_em and e1_em) or (pf12sp == pe1msp)
+    same2 = (f2_em and e2_em) or (pf22sp == pe2msp)
+
+    if same1 and not same2:
+      consist1_cases.append((pf11, pf12, pe1m, pf21, pf22, pe2m, s1, s2, sm, t1, tm))
+    elif same2 and not same1:
+      consist2_cases.append((pf11, pf12, pe1m, pf21, pf22, pe2m, s1, s2, sm, t1, tm))
+
+  shuffle(consist1_cases)
+  for case in consist2_cases[:10]:
+    pf11, pf12, pe1m, pf21, pf22, pe2m, s1, s2, sm, t1, tm = case
+    print()
+    print(s1.split('\t')[0])
+    print(s2.split('\t')[0])
+    print(sm.split('\t')[0])
+    print('{} -----> {}'.format(t1, tm))
+    print('TITLE', sm.split('\t')[1])
+    print('BODY', sm.split('\t')[2])
+    print('{} => {}'.format(pf11, pf12))
+    print(pe1m)
+    print('{} => {}'.format(pf21, pf22))
+    print(pe2m)
+
+  print('1 consist {}, 2 consist {}'.format(len(consist1_cases), len(consist2_cases)))
+
+
 def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file=None, skip: int=0, num_hop: int=2, se: SlingExtractor=None, path: bool=True):
   def get_major_type(names: List[str]):
     if se is None:
@@ -960,11 +1036,11 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
       e_em = evaluation(pm, tm)
     else:
       e_em = evaluation(pm, tm)
-    p2sp = set(p2.split(join_sep))
+    p2sp = set(p2.lower().split(join_sep))
     if path:
-      pmsp = set(pm.split(path_sep)[-1].split(join_sep))
+      pmsp = set(pm.lower().split(path_sep)[-1].split(join_sep))
     else:
-      pmsp = set(pm.split(join_sep))
+      pmsp = set(pm.lower().split(join_sep))
     same = p2sp == pmsp
     tm_type = get_major_type([a for ans in tm.split(ans_sep) for a in ans.split(alias_sep)])
     p2_type = get_major_type(p2sp)
@@ -1202,8 +1278,8 @@ if __name__ == '__main__':
     'implicit_data_with_explicit', 'implicit_data_with_normal', 'normal_data_with_explicit',
     '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop', 'implicit2normalmultitask',
     'get_follow_uq_first', 'get_follow_uq_second', 'combine_first_second', 'break2normal_format',
-    'compare_e2e_follow', 'only_firstsecond_context', 'generate_fake_statement', 'generate_negative_passage',
-    'combine_context', 'get_path_data', 'get_path_data_nq',
+    'compare_e2e_follow', 'consist_compare_four', 'only_firstsecond_context', 'generate_fake_statement', 'generate_negative_passage',
+    'combine_context', 'get_path_data', 'get_hint_data', 'get_path_data_nq', 'get_hint_data_nq',
     'implicit_data_nq', 'explicit_data_nq', 'compare_two'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
@@ -2217,10 +2293,11 @@ if __name__ == '__main__':
         fout.write('{}\n'.format(s))
 
   elif args.task == 'get_path_data':
+    inverse = True
     target_file, = args.input
     out_file = args.output
-    inter = 5
-    active = {2, 4}
+    inter = 3
+    active = {2}
     with open(target_file, 'r') as fin, open(out_file, 'w') as fout:
       prev = None
       for i, t in enumerate(fin):
@@ -2228,10 +2305,36 @@ if __name__ == '__main__':
         if i % inter == 0:
           prev = t
         elif i % inter in active:
-          t = '{} -> {}'.format(prev, t)
+          if inverse:
+            t = '{} <- {}'.format(t, prev)
+          else:
+            t = '{} -> {}'.format(prev, t)
         fout.write('{}\n'.format(t))
 
+  elif args.task == 'get_hint_data':
+    source_file, target_file, = args.input
+    out_source_file, out_target_file = args.output.split(':')
+    inter = 3
+    active = {2}
+    with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
+      open(out_source_file, 'w') as sfout, open(out_target_file, 'w') as tfout:
+      prev = None
+      for i, t in enumerate(tfin):
+        t = t.rstrip('\n')
+        s = sfin.readline().rstrip('\n').split('\t')
+        s[0] = s[0].strip()
+        if not s[0].endswith('.') and not s[0].endswith('?'):
+          s[0] = s[0] + '.'
+        if i % inter == 0:
+          prev = t
+        elif i % inter in active:
+          sfout.write('{} Intermediate answer:\t{}\t{}\n'.format(s[0], s[1], s[2]))
+          tfout.write('{}\n'.format(prev))
+        sfout.write('{} Answer:\t{}\t{}\n'.format(s[0], s[1], s[2]))
+        tfout.write('{}\n'.format(t))
+
   elif args.task == 'get_path_data_nq':
+    inverse = True
     tsv_file, = args.input
     out_file = args.output
     inter = 3
@@ -2244,5 +2347,33 @@ if __name__ == '__main__':
           prev = t.split('\t')[2]
         elif i % inter in active:
           ts = t.split('\t')
-          t = '{}\t{}\t{} -> {}\t{}'.format(ts[0], ts[1], prev, ts[2], ts[3])
+          if inverse:
+            t = '{}\t{}\t{} <- {}\t{}'.format(ts[0], ts[1], ts[2], prev, ts[3])
+          else:
+            t = '{}\t{}\t{} -> {}\t{}'.format(ts[0], ts[1], prev, ts[2], ts[3])
         fout.write('{}\n'.format(t))
+
+  elif args.task == 'get_hint_data_nq':
+    tsv_file, = args.input
+    out_file = args.output
+    inter = 3
+    active = {2}
+    ind = 0
+    with open(tsv_file, 'r') as fin, open(out_file, 'w') as fout:
+      prev = None
+      for i, t in enumerate(fin):
+        t = t.rstrip('\n')
+        ts = t.split('\t')
+        if not ts[1].endswith('.') and not ts[1].endswith('?'):
+          ts[1] = ts[1] + '.'
+        if i % inter == 0:
+          prev = ts[2]
+        elif i % inter in active:
+          fout.write('{}\t{}\t{}\t{}\n'.format(ind, '{} Intermediate answer:'.format(ts[1]), prev, 0))
+          ind += 1
+        fout.write('{}\t{}\t{}\t{}\n'.format(ind, '{} Answer:'.format(ts[1]), ts[2], 0))
+        ind += 1
+
+  elif args.task == 'consist_compare_four':
+    follow_file1, e2e_file1, follow_file2, e2e_file2, source_file, target_file = args.input
+    consist_compare_four(follow_file1, e2e_file1, follow_file2, e2e_file2, source_file, target_file)
