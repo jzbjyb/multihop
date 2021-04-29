@@ -13,7 +13,8 @@ import os
 import csv
 import html
 import matplotlib.pyplot as plot
-from dataset import Break, HoptopQA, WebQuestion, ComplexWebQuestion, SlingExtractor, MultihopQuestion, GraphQuestion
+from dataset import Break, HoptopQA, WebQuestion, ComplexWebQuestion, \
+  SlingExtractor, MultihopQuestion, GraphQuestion, CWQSnippet
 from rag.utils_rag import exact_match_score, f1_score
 from rag.eval_rag import get_scores
 
@@ -1264,6 +1265,24 @@ def compare_two(pred_file1, pred_file2, source_file, target_file, which=2, num_h
   print('1 better avg path {}, 2 better avg path {}'.format(np.mean(p1_lens), np.mean(p2_lens)))
 
 
+def get_snippet(id_file, output_file, cwq, split: str='dev'):
+  empty_count = 0
+  split_count = 0
+  num_sps = []
+  with open(id_file, 'r') as fin, open(output_file, 'w') as fout:
+    for i, l in enumerate(fin):
+      qid = l.strip()
+      if i % 3 == 0:
+        title, body, is_split, is_empty, num_sp = cwq.get_context(split, qid)
+        title = title.replace('\t', ' ')
+        body = body.replace('\t', ' ')
+      empty_count += is_empty
+      split_count += is_split
+      num_sps.append(num_sp)
+      fout.write('{}\t{}\t{}\t{}\n'.format(title, body, is_split, is_empty))
+  print('empty {}, split {}, avg #snippet {}'.format(empty_count, split_count, np.mean(num_sps)))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -1280,7 +1299,7 @@ if __name__ == '__main__':
     'get_follow_uq_first', 'get_follow_uq_second', 'combine_first_second', 'break2normal_format',
     'compare_e2e_follow', 'consist_compare_four', 'only_firstsecond_context', 'generate_fake_statement', 'generate_negative_passage',
     'combine_context', 'get_path_data', 'get_hint_data', 'get_path_data_nq', 'get_hint_data_nq',
-    'implicit_data_nq', 'explicit_data_nq', 'compare_two'], default='hotpotqa')
+    'implicit_data_nq', 'explicit_data_nq', 'compare_two', 'get_snippet', 'combine_snippet'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -2377,3 +2396,20 @@ if __name__ == '__main__':
   elif args.task == 'consist_compare_four':
     follow_file1, e2e_file1, follow_file2, e2e_file2, source_file, target_file = args.input
     consist_compare_four(follow_file1, e2e_file1, follow_file2, e2e_file2, source_file, target_file)
+
+  elif args.task == 'get_snippet':
+    split = 'dev'
+    cwq = CWQSnippet('/home/jzb/exp/Break/break_dataset/QDMR/complexwebq')
+    id_file, = args.input
+    output_file = args.output
+    get_snippet(id_file, output_file, cwq, split=split)
+
+  elif args.task == 'combine_snippet':
+    source_file, snippet_file = args.input
+    out_file = args.output
+    with open(source_file, 'r') as sfin, open(snippet_file, 'r') as nfin, open(out_file, 'w') as fout:
+      for i, s in enumerate(sfin):
+        question = s.strip()
+        split = nfin.readline().rstrip('\n').split('\t')
+        title, body, _, _ = split
+        fout.write('{}\t{}\t{}\n'.format(question, title, body))

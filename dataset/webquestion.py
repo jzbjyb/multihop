@@ -1,8 +1,98 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 import os
 import json
+import numpy as np
 from collections import defaultdict
 from .multihop_question import MultihopQuestion
+
+
+class CWQSnippet(object):
+  def __init__(self, root_dir: str):
+    print('loading snippets ...')
+    for split, file in [('train', '1_1/web_snippets_train.json'), ('dev', '1_1/web_snippets_dev.json')]:
+      file = os.path.join(root_dir, file)
+      if not os.path.exists(file):
+        continue
+      setattr(self, split, self.load_split(file))
+
+
+  @staticmethod
+  def merge(list1, list2):
+    result = []
+    min_len = min(len(list1), len(list2))
+    for i in range(min_len):
+      if np.random.rand() > 0.5:
+        result.append(list1[i])
+        result.append(list2[i])
+      else:
+        result.append(list2[i])
+        result.append(list1[i])
+    result = result + list1[min_len:] + list2[min_len:]
+    return result
+
+
+  def load_split(self, file):
+    id2split2source2qs: Dict[str, Dict[str, Dict[str, Tuple[str, List]]]] = defaultdict(lambda: defaultdict(lambda: {}))
+    with open(file, 'r') as fin:
+      data = json.load(fin)
+      for q in data:
+        qid = q['question_ID']
+        sources = q['split_source']
+        split = q['split_type']
+        snippets = q['web_snippets']
+        question = q['web_query']
+        for s in sources:
+          id2split2source2qs[qid][split][s] = (question, snippets)
+    return id2split2source2qs
+
+
+  def get_context(self, split, qid, max_num_words_per_split: int=200, shuffle: bool=True) -> Tuple[str, str]:
+    source_li = ['ptrnet split', 'noisy supervision split']
+    id2split2source2qs = getattr(self, split)
+    three_splits = []
+    num_splits = []
+    for split in ['split_part1', 'split_part2', 'full_question']:
+      mnwps = max_num_words_per_split
+      if split == 'full_question':
+        mnwps = max_num_words_per_split * 2
+      titles = []
+      sps = []
+      wc = 0
+      for source in source_li:
+        if source not in id2split2source2qs[qid][split]:
+          continue
+        question, snippets = id2split2source2qs[qid][split][source]
+        for snippet in snippets:
+          sp = snippet['snippet']
+          title = snippet['title']
+          cc = len(sp.split()) + len(title.split())
+          if wc + cc > mnwps:
+            break
+          titles.append(title)
+          sps.append(sp)
+          wc += cc
+        if len(titles) > 0:
+          break
+      num_splits.append(len(titles) > 0)
+      three_splits.append((titles, sps))
+    is_split = True
+    is_empty = False
+    if num_splits[0] and num_splits[1]:
+      if shuffle:
+        titles = self.merge(three_splits[0][0], three_splits[1][0])
+        sps = self.merge(three_splits[0][1], three_splits[1][1])
+      else:
+        titles = three_splits[0][0] + three_splits[1][0]
+        sps = three_splits[0][1] + three_splits[1][1]
+    elif num_splits[2]:
+      is_split = False
+      titles = three_splits[2][0]
+      sps = three_splits[2][1]
+    else:
+      is_empty = True
+      titles = []
+      sps = []
+    return ' '.join(titles), ' '.join(sps), is_split, is_empty, len(titles)
 
 
 class WebQuestion(object):
