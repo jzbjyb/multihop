@@ -19,6 +19,7 @@ class MultihopQuestion(object):
   def format_question(self, question: str):
     if not question.strip().lower().startswith('return'):
       question = question.strip().rstrip('?') + '?'
+    question = question.replace('\t', ' ')
     #question = truecase.get_true_case(question)
     return question
 

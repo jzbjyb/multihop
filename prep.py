@@ -44,14 +44,20 @@ skip_ner_types = {'DATE', 'TIME', 'PERCENT', 'MONEY', 'QUANTITY', 'ORDINAL', 'CA
 ner_type2wiki_type = {}
 
 
-def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score, remove_dup: bool=False, path: bool=True):
+def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score, remove_dup: bool=True, path: bool=True):
   if eval_mode == 'multi-multi':
     if path:
       predictions = predictions.split(path_sep)[-1]
-    predictions = predictions.split(pred_sep)
     if remove_dup:
-      predictions = list(set(predictions))
-    targets = [ans.split(alias_sep) for ans in targets.split(ans_sep)]
+      predictions = list(set(predictions.split(pred_sep)))
+      targets = [list(set(ans.split(alias_sep))) for ans in set(targets.split(ans_sep))]
+    else:
+      predictions = predictions.split(pred_sep)
+      targets = [ans.split(alias_sep) for ans in targets.split(ans_sep)]
+    try:
+      predictions.remove('')  # remove empty answer
+    except ValueError:
+      pass
     if len(targets) > 1:
       eval_stat['multi'][-1] += 1
     else:
@@ -686,6 +692,32 @@ def get_explicit_data(source_file, target_file, output_source_file, output_targe
         tfout.write(target + '\n')
 
 
+def get_explicit_data_nq(source_file, target_file, output_file, raw_source_file, num_hop=2):
+  shs = []
+  ind = 0
+  with open(source_file, 'r') as sfin, open(raw_source_file, 'r') as rsfin, open(target_file, 'r') as tfin, \
+    open(output_file, 'w') as fout:
+    for i, l in enumerate(sfin):
+      source = l.strip()
+      target = tfin.readline().strip()
+      target = join_sep.join([ans.split(alias_sep)[0] for ans in target.split(ans_sep)])
+      raw_source = rsfin.readline().strip()
+      if i % (num_hop + 1) == num_hop:  # multihop
+        shs = [sh + ('' if sh[-1] in {'.', '?'} else '.') for sh in shs]
+        shq = ' '.join(shs)
+        fout.write('{}\t{}\t{}\t{}\n'.format(ind, 'Decompose and answer the following question: ' + raw_source, target, 0))
+        ind += 1
+        fout.write('{}\t{}\t{}\t{}\n'.format(ind, 'Decompose the following question: ' + raw_source, shq, 0))
+        ind += 1
+        fout.write('{}\t{}\t{}\t{}\n'.format(ind, 'Answer the following question: ' + shq, target, 0))
+        ind += 1
+        shs = []
+      else:  # single hop
+        shs.append(source)
+        fout.write('{}\t{}\t{}\t{}\n'.format(ind, 'Answer the following question: ' + raw_source, target, 0))
+        ind += 1
+
+
 def normal_data(source_file, target_file, output_source_file, output_target_file, num_hop=2, with_consist: str=None):
   shs = []
   with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
@@ -753,6 +785,30 @@ def get_implicit_data(source_file, target_file, output_source_file, output_targe
         else:
           sfout.write('{}\t{}\t{}\n'.format(raw_sh, sp[1], sp[2]))
         tfout.write(target + '\n')
+
+
+def get_implicit_data_nq(source_file, target_file, output_file, raw_source_file, num_hop=2):
+  shs = []
+  ind = 0
+  with open(source_file, 'r') as sfin, open(raw_source_file, 'r') as rsfin, open(target_file, 'r') as tfin, \
+    open(output_file, 'w') as fout:
+    for i, l in enumerate(sfin):
+      source = l.strip()
+      target = tfin.readline().strip()
+      target = join_sep.join([ans.split(alias_sep)[0] for ans in target.split(ans_sep)])
+      raw_source = rsfin.readline().strip()
+      if i % (num_hop + 1) == num_hop:  # multihop
+        shs = [sh + ('' if sh[-1] in {'.', '?'} else '.') for sh in shs]
+        shq = ' '.join(shs)
+        fout.write('{}\t{}\t{}\t{}\n'.format(ind, raw_source, target, 0))
+        ind += 1
+        fout.write('{}\t{}\t{}\t{}\n'.format(ind, shq, target, 0))
+        ind += 1
+        shs = []
+      else:  # single hop
+        shs.append(source)
+        fout.write('{}\t{}\t{}\t{}\n'.format(ind, raw_source, target, 0))
+        ind += 1
 
 
 def gen_multi_2hop(source_file, target_file, pred_file, out_source_file, out_target_file, raw_count: int=1, out_count: int=1, num_hop: int=2):
@@ -874,7 +930,10 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
       if i % (num_hop + 1) == num_hop and skip:
         for _ in range(skip):
           _ = efin.readline()
-      s = sfin.readline().strip()
+      s = sfin.readline()
+      if s == '':
+        break
+      s = s.strip()
       t = tfin.readline().strip()
       pfs.append(pf)
       pes.append(pe)
@@ -894,14 +953,18 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
   e_ems = []
   key2cases = defaultdict(list)
   for p1, p2, pm, s1, s2, sm, t1, tm in zip(p1s, p2s, pms, s1s, s2s, sms, t1s, tms):
-    f1_em = evaluation(p1, t1, 'multi-multi')
-    f_em = evaluation(p2, tm, 'multi-multi')
+    f1_em = evaluation(p1, t1)
+    f_em = evaluation(p2, tm)
     if path:
-      e_em = evaluation(pm.split(path_sep)[-1], tm, 'multi-multi')
+      #e_em = evaluation(pm.split(path_sep)[-1], tm)
+      e_em = evaluation(pm, tm)
     else:
-      e_em = evaluation(pm, tm, 'multi-multi')
+      e_em = evaluation(pm, tm)
     p2sp = set(p2.split(join_sep))
-    pmsp = set(pm.split(join_sep))
+    if path:
+      pmsp = set(pm.split(path_sep)[-1].split(join_sep))
+    else:
+      pmsp = set(pm.split(join_sep))
     same = p2sp == pmsp
     tm_type = get_major_type([a for ans in tm.split(ans_sep) for a in ans.split(alias_sep)])
     p2_type = get_major_type(p2sp)
@@ -949,8 +1012,8 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
             ind += 1
         else:
           raise NotImplementedError
-  print('consist {}, all em {}, follow em {}, e2e em {}'.format(
-    np.mean(sames), np.mean(ems), np.mean(f_ems), np.mean(e_ems)))
+  print('consist {}, all em {:.2f}, follow em {:.2f}, e2e em {:.2f}'.format(
+    np.mean(sames), np.mean(ems) * 100, np.mean(f_ems) * 100, np.mean(e_ems) * 100))
   for key in sorted(key2cases.keys()):
     print(key, len(key2cases[key]))
 
@@ -1076,6 +1139,55 @@ def generate_fake_statement(source_file, target_file, out_file, se, nlp, num_hop
   print('{} out of {}'.format(count, all_count))
 
 
+def rag2nq_format(source_file, target_file, output_file, num_hop: int=2):
+  ind = 0
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(output_file, 'w') as fout:
+    for i, s in enumerate(sfin):
+      q = s.strip().split('\t')[0]
+      t = tfin.readline().strip()
+      fout.write('{}\t{}\t{}\t{}\n'.format(ind, q, t, 0))
+      ind += 1
+
+
+def compare_two(pred_file1, pred_file2, source_file, target_file, which=2, num_hop: int=2):
+  p1_cases = []
+  p2_cases = []
+  p1_has_path = []
+  p2_has_path = []
+  p1_lens = []
+  p2_lens = []
+  with open(pred_file1, 'r') as p1fin, open(pred_file2, 'r') as p2fin, open(source_file, 'r') as sfin, open(target_file, 'r') as tfin:
+    for i, s in enumerate(sfin):
+      s = s.strip()
+      t = tfin.readline().strip()
+      p1 = p1fin.readline().strip().split('\t')[0]
+      p2 = p2fin.readline().strip().split('\t')[0]
+      if i % (num_hop + 1) == which:
+        em1 = evaluation(p1, t)
+        em2 = evaluation(p2, t)
+        p1_has_path.append(path_sep in p1)
+        p2_has_path.append(path_sep in p2)
+        if em1 and not em2:
+          p1_cases.append((s, t, p1, p2))
+          p1_lens.append(len(p1.split()))
+        elif em2 and not em1:
+          p2_cases.append((s, t, p1, p2))
+          p2_lens.append(len(p1.split()))
+  for pi, cases in enumerate([p1_cases, p2_cases]):
+    print('\n======= {} better =======\n'.format(pi + 1))
+    shuffle(cases)
+    for case in cases[:10]:
+      s, t, p1, p2 = case
+      print('')
+      print(s)
+      print(t)
+      print(p1)
+      print(p2)
+  print('1 better {}, 2 better {}'.format(len(p1_cases), len(p2_cases)))
+  print('1 has path {}, 2 has path {}'.format(np.mean(p1_has_path), np.mean(p2_has_path)))
+  print('1 better avg path {}, 2 better avg path {}'.format(np.mean(p1_lens), np.mean(p2_lens)))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -1091,7 +1203,8 @@ if __name__ == '__main__':
     '2hop_consistency_data', 'gen_multi_2hop', 'ana_reducehop', 'implicit2normalmultitask',
     'get_follow_uq_first', 'get_follow_uq_second', 'combine_first_second', 'break2normal_format',
     'compare_e2e_follow', 'only_firstsecond_context', 'generate_fake_statement', 'generate_negative_passage',
-    'combine_context', 'get_path_data', 'get_path_data_nq'], default='hotpotqa')
+    'combine_context', 'get_path_data', 'get_path_data_nq',
+    'implicit_data_nq', 'explicit_data_nq', 'compare_two'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1099,7 +1212,7 @@ if __name__ == '__main__':
   parser.add_argument('--num_hops', type=int, default=2)
   parser.add_argument('--num_para', type=int, default=1)
   parser.add_argument('--thres', type=float, default=.0)
-  parser.add_argument('--eval_mode', type=str, choices=['multi-multi', 'multi-single', 'single-single'], default='single-single')
+  parser.add_argument('--eval_mode', type=str, choices=['multi-multi', 'multi-single', 'single-single'], default='multi-multi')
   parser.add_argument('--no_context', action='store_true')
   parser.add_argument('--gold_context', action='store_true')
   args = parser.parse_args()
@@ -1240,6 +1353,10 @@ if __name__ == '__main__':
               fout.write('<br>\n')
             fout.write('<hr>\n')
 
+  elif args.task == 'compare_two':
+    pred_file1, pred_file2, source_file, target_file = args.input
+    compare_two(pred_file1, pred_file2, source_file, target_file, which=2)
+
   elif args.task == 'ana':
     def printify(case):
       print('---')
@@ -1305,7 +1422,10 @@ if __name__ == '__main__':
           pass
         else:
           continue
-        source = sfin.readline().strip()
+        source = sfin.readline()
+        if source == '':
+          break
+        source = source.strip()
         score = scorefin.readline().strip().split('\t')
         targets = tfin.readline().rstrip('\n')
         prev_targets.append(targets)
@@ -1965,10 +2085,20 @@ if __name__ == '__main__':
     output_source_file, output_target_file = source_file + '.explicit', target_file + '.explicit'
     get_explicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file)
 
+  elif args.task == 'explicit_data_nq':
+    source_file, target_file, raw_source_file = args.input
+    output_file = args.output
+    get_explicit_data_nq(source_file, target_file, output_file, raw_source_file)
+
   elif args.task == 'implicit_data':
     source_file, target_file, raw_source_file = args.input
     output_source_file, output_target_file = source_file + '.implicit', target_file + '.implicit'
     get_implicit_data(source_file, target_file, output_source_file, output_target_file, raw_source_file)
+
+  elif args.task == 'implicit_data_nq':
+    source_file, target_file, raw_source_file = args.input
+    output_file = args.output
+    get_implicit_data_nq(source_file, target_file, output_file, raw_source_file)
 
   elif args.task == 'implicit2normalmultitask':
     source_file, target_file = args.input
