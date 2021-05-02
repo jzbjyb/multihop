@@ -32,6 +32,9 @@ inplace_join_sep = ', '
 alias_sep = '\t'
 ans_sep = '\t\t'
 path_sep = ' -> '
+path_inverse_sep = ' <- '
+#path_inverse_sep = '  ⁇ -'
+state_blank = '**blank**'
 
 
 numhops2temps: Dict[int, List[str]] = {
@@ -45,10 +48,13 @@ skip_ner_types = {'DATE', 'TIME', 'PERCENT', 'MONEY', 'QUANTITY', 'ORDINAL', 'CA
 ner_type2wiki_type = {}
 
 
-def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score, remove_dup: bool=True, path: bool=True):
+def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score, remove_dup: bool=True, path: bool=False, path_inverse: bool=True):
+  predictions = predictions.strip()
   if eval_mode == 'multi-multi':
     if path:
       predictions = predictions.split(path_sep)[-1]
+    elif path_inverse:
+      predictions = predictions.split(path_inverse_sep)[0]
     if remove_dup:
       predictions = list(set(predictions.split(pred_sep)))
       targets = [list(set(ans.split(alias_sep))) for ans in set(targets.split(ans_sep))]
@@ -879,13 +885,18 @@ def implicit2normalmultitask(source_file, target_file, output_source_file, outpu
         tfout.write(t)
 
 
-def get_follow_uq(source_file: str, target_file: str, file_out: str, num_hop: int=2, which: int=0, pred_file: str=None):
+def get_follow_uq(source_file: str, target_file: str, file_out: str, num_hop: int=2, which: int=0, pred_file: str=None, add_hint: bool=False):
   pred_file = pred_file or source_file
   with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
     open(pred_file, 'r') as pfin, open(file_out, 'w') as fout:
     count = 0
     for i, s in enumerate(sfin):
       s = s.rstrip('\n')
+      if add_hint:
+        s = s.strip()
+        if not s.endswith('.') and not s.endswith('?'):
+          s = s + '.'
+        s = '{} Answer:'.format(s)
       t = tfin.readline().rstrip('\n')
       t = join_sep.join([ans.split(alias_sep)[0] for ans in t.split(ans_sep)])
       if i % (num_hop + 1) == which:
@@ -982,7 +993,7 @@ def consist_compare_four(follow_file1, e2e_file1, follow_file2, e2e_file2, sourc
   print('1 consist {}, 2 consist {}'.format(len(consist1_cases), len(consist2_cases)))
 
 
-def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file=None, skip: int=0, num_hop: int=2, se: SlingExtractor=None, path: bool=True):
+def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file=None, skip: int=0, num_hop: int=2, se: SlingExtractor=None, path: bool=False, path_inverse: bool=True):
   def get_major_type(names: List[str]):
     if se is None:
       return None
@@ -1001,15 +1012,12 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
   ts = []
   with open(follow_file, 'r') as ffin, open(e2e_file, 'r') as efin, \
     open(source_file, 'r') as sfin, open(target_file, 'r') as tfin:
-    for i, f1 in enumerate(ffin):
-      pf = f1.strip().split('\t')[0]
+    for i, s in enumerate(sfin):
+      pf = ffin.readline().strip().split('\t')[0]
       pe = efin.readline().strip().split('\t')[0]
       if i % (num_hop + 1) == num_hop and skip:
         for _ in range(skip):
           _ = efin.readline()
-      s = sfin.readline()
-      if s == '':
-        break
       s = s.strip()
       t = tfin.readline().strip()
       pfs.append(pf)
@@ -1025,21 +1033,21 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
   t1s = ts[0:len(ts):3]
   tms = ts[2:len(ts):3]
   sames = []
+  all_sames = []
   ems = []
   f_ems = []
   e_ems = []
+  all_cases = []
   key2cases = defaultdict(list)
   for p1, p2, pm, s1, s2, sm, t1, tm in zip(p1s, p2s, pms, s1s, s2s, sms, t1s, tms):
     f1_em = evaluation(p1, t1)
     f_em = evaluation(p2, tm)
-    if path:
-      #e_em = evaluation(pm.split(path_sep)[-1], tm)
-      e_em = evaluation(pm, tm)
-    else:
-      e_em = evaluation(pm, tm)
+    e_em = evaluation(pm, tm)
     p2sp = set(p2.lower().split(join_sep))
     if path:
       pmsp = set(pm.lower().split(path_sep)[-1].split(join_sep))
+    elif path_inverse:
+      pmsp = set(pm.lower().split(path_inverse_sep)[0].split(join_sep))
     else:
       pmsp = set(pm.lower().split(join_sep))
     same = p2sp == pmsp
@@ -1052,11 +1060,13 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
       type_agree = '*'
     key = '{}-{}-{}-{}{}-{}'.format(int(f_em), int(e_em), int(same), int(len(p2sp) > 1), int(len(pmsp) > 1), type_agree)
     key2cases[key].append((s1, s2, sm, p1, p2, pm, t1, tm, f1_em, f_em, e_em, same))
+    all_cases.append((s1, s2, sm, p1, p2, pm, t1, tm, f1_em, f_em, e_em, same))
     ems.append(f_em and e_em)
     f_ems.append(f_em)
     e_ems.append(e_em)
     if not f_em or not e_em:
       sames.append(same)
+    all_sames.append(same or (f_em and e_em))
   if out_file:
     ind = 0
     with open(out_file, 'w') as fout:
@@ -1077,20 +1087,18 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
             fout.write('<div style="padding-left: 80px;">GOLD: {}</div>\n'.format(tm))
             fout.write('<div style="padding-left: 80px;">PREDICTION: {}</div>\n'.format(pm))
             fout.write('<hr>\n')
-        elif out_file.endswith('.txt'):
-          fout.write('index\thop\tquestion\tcontext_title\tcontext_body\tgold\tprediction\tcorrect\tconsistent\n')
-          for case in cases:
-            s1, s2, sm, p1, p2, pm, t1, tm, f1_em, f_em, e_em, same = case
-            t1 = join_sep.join([x.strip() for x in t1.split('\t') if len(x.strip()) > 0])
-            tm = join_sep.join([x.strip() for x in tm.split('\t') if len(x.strip()) > 0])
-            fout.write('{}\thop1\t{}\t{}\t{}\t{}\t{}\n'.format(ind, s1, t1, p1, f1_em, same))
-            fout.write('{}\thop2\t{}\t{}\t{}\t{}\t{}\n'.format(ind, s2, tm, p2, f_em, same))
-            fout.write('{}\tmultihop\t{}\t{}\t{}\t{}\t{}\n'.format(ind, sm, tm, pm, e_em, same))
-            ind += 1
-        else:
-          raise NotImplementedError
-  print('consist {}, all em {:.2f}, follow em {:.2f}, e2e em {:.2f}'.format(
-    np.mean(sames), np.mean(ems) * 100, np.mean(f_ems) * 100, np.mean(e_ems) * 100))
+      if out_file.endswith('.txt'):
+        fout.write('index\thop\tquestion\tcontext_title\tcontext_body\tgold\tprediction\tcorrect\tconsistent\n')
+        for case in all_cases:
+          s1, s2, sm, p1, p2, pm, t1, tm, f1_em, f_em, e_em, same = case
+          t1 = join_sep.join([x.strip() for x in t1.split('\t') if len(x.strip()) > 0])
+          tm = join_sep.join([x.strip() for x in tm.split('\t') if len(x.strip()) > 0])
+          fout.write('{}\thop1\t{}\t{}\t{}\t{}\t{}\n'.format(ind, s1, t1, p1, f1_em, same))
+          fout.write('{}\thop2\t{}\t{}\t{}\t{}\t{}\n'.format(ind, s2, tm, p2, f_em, same))
+          fout.write('{}\tmultihop\t{}\t{}\t{}\t{}\t{}\n'.format(ind, sm, tm, pm, e_em, same))
+          ind += 1
+  print('consist {}, consist all {}, all em {:.2f}, follow em {:.2f}, e2e em {:.2f}'.format(
+    np.mean(sames), np.mean(all_sames), np.mean(ems) * 100, np.mean(f_ems) * 100, np.mean(e_ems) * 100))
   for key in sorted(key2cases.keys()):
     print(key, len(key2cases[key]))
 
@@ -1208,7 +1216,7 @@ def generate_fake_statement(source_file, target_file, out_file, se, nlp, num_hop
         if len(nt) <= 0:
           fout.write('\n')
           continue
-        new_q = new_q.replace('**blank**', nt[0])  # only use one answer
+        new_q = new_q.replace(state_blank, nt[0])  # only use one answer
         fout.write('{}\n'.format(new_q))
         count += 1
       else:
@@ -1216,12 +1224,13 @@ def generate_fake_statement(source_file, target_file, out_file, se, nlp, num_hop
   print('{} out of {}'.format(count, all_count))
 
 
-def rag2nq_format(source_file, target_file, output_file, num_hop: int=2):
+def rag2nq_format(source_file, target_file, output_file):
   ind = 0
   with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(output_file, 'w') as fout:
     for i, s in enumerate(sfin):
       q = s.strip().split('\t')[0]
       t = tfin.readline().strip()
+      t = join_sep.join([ans.split(alias_sep)[0] for ans in t.split(ans_sep)])
       fout.write('{}\t{}\t{}\t{}\n'.format(ind, q, t, 0))
       ind += 1
 
@@ -1283,6 +1292,82 @@ def get_snippet(id_file, output_file, cwq, split: str='dev'):
   print('empty {}, split {}, avg #snippet {}'.format(empty_count, split_count, np.mean(num_sps)))
 
 
+def get_gold_context_data_nq(source_file, target_file, output_file, se, num_hop: int=2):
+  prev = []
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, \
+    open(output_file, 'w') as fout,  open(output_file + '.target', 'w') as tfout, open(output_file + '.raw', 'w') as rfout:
+    for i, s in tqdm(enumerate(sfin)):
+      q = s.strip()
+      rawt = tfin.readline().strip()
+      t = inplace_join_sep.join([a.split(alias_sep)[0] for a in rawt.split(ans_sep)])
+      if q.lower().startswith('return '):
+        state = '{} is {}.'.format(q[6:].strip(), state_blank)
+      else:
+        state = se.question2statement_parse(q, keep_ph=True)
+      if state is None:
+        rfout.write('*\n')
+        prev.append(None)
+      else:
+        if not state.endswith('.'):
+          state = state + '.'
+        state = state.replace(state_blank, t)
+        new_q = '{} {}'.format(state, q)
+        rfout.write('{}\n'.format(new_q))
+        fout.write('{}\n'.format(new_q))
+        tfout.write('{}\n'.format(rawt))
+        prev.append(state)
+      if i % (num_hop + 1) == num_hop:
+        for ind in [-3, -2]:
+          if prev[ind] is not None:
+            new_q = '{} {}'.format(prev[ind], q)
+            rfout.write('{}\n'.format(new_q))
+            fout.write('{}\n'.format(new_q))
+            tfout.write('{}\n'.format(rawt))
+          else:
+            rfout.write('*\n')
+        if prev[-3] is not None and prev[-2] is not None:
+          new_q = '{} {} {}'.format(prev[-3], prev[-2], q)
+          rfout.write('{}\n'.format(new_q))
+          fout.write('{}\n'.format(new_q))
+          tfout.write('{}\n'.format(rawt))
+        else:
+          rfout.write('*\n')
+
+
+def statement_analysis(source_file, target_file, source_file_raw, pred_file, inter: int=6):
+  predictions = []
+  golds = []
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(source_file_raw, 'r') as srfin, open(pred_file, 'r') as pfin:
+    for i, sr in enumerate(srfin):
+      sr = sr.strip()
+      if sr == '*':
+        predictions.append(None)
+        golds.append(None)
+        continue
+      s = sfin.readline().strip()
+      t = tfin.readline().strip()
+      p = pfin.readline().strip()
+      predictions.append(p)
+      golds.append(t)
+  mh_ems = []
+  sh_ems = []
+  for i in range(0, len(predictions), inter):
+    cur_preds = predictions[i:i + inter]
+    cur_golds = golds[i:i + inter]
+    if len(cur_preds) < inter:
+      continue
+    mh_mh = cur_preds[2]
+    sh_mh = cur_preds[-1]
+    gold = cur_golds[-1]
+    if mh_mh is None or sh_mh is None:
+      continue
+    mh_em = evaluation(mh_mh, gold)
+    sh_em = evaluation(sh_mh, gold)
+    mh_ems.append(mh_em)
+    sh_ems.append(sh_em)
+  print(np.mean(mh_ems), np.mean(sh_ems))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -1299,7 +1384,8 @@ if __name__ == '__main__':
     'get_follow_uq_first', 'get_follow_uq_second', 'combine_first_second', 'break2normal_format',
     'compare_e2e_follow', 'consist_compare_four', 'only_firstsecond_context', 'generate_fake_statement', 'generate_negative_passage',
     'combine_context', 'get_path_data', 'get_hint_data', 'get_path_data_nq', 'get_hint_data_nq',
-    'implicit_data_nq', 'explicit_data_nq', 'compare_two', 'get_snippet', 'combine_snippet'], default='hotpotqa')
+    'implicit_data_nq', 'explicit_data_nq', 'compare_two', 'get_snippet', 'combine_snippet',
+    'get_gold_context_data_nq', 'rag2nq_format', 'statement_analysis'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -2225,12 +2311,12 @@ if __name__ == '__main__':
   elif args.task == 'get_follow_uq_first':
     source_file, target_file = args.input
     file_out = args.output
-    get_follow_uq(source_file, target_file, file_out, which=0)
+    get_follow_uq(source_file, target_file, file_out, which=0, add_hint=True)
 
   elif args.task == 'get_follow_uq_second':
     source_file, target_file, pred_file = args.input
     file_out = args.output
-    get_follow_uq(source_file, target_file, file_out, which=1, pred_file=pred_file)
+    get_follow_uq(source_file, target_file, file_out, which=1, pred_file=pred_file, add_hint=True)
 
   elif args.task == 'combine_first_second':
     pred_file1, pred_file2 = args.input
@@ -2266,9 +2352,10 @@ if __name__ == '__main__':
     #se = SlingExtractor()
     #se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
     se = None
-    follow_file, e2e_file, source_file, target_file = args.input
+    follow_file, e2e_file, source_file, target_file, skip = args.input
+    skip = int(skip)
     out_file = args.output
-    compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file, se=se, skip=0)
+    compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file, se=se, skip=skip)
 
   elif args.task == 'only_firstsecond_context':
     source_file, = args.input
@@ -2344,13 +2431,13 @@ if __name__ == '__main__':
         s[0] = s[0].strip()
         if not s[0].endswith('.') and not s[0].endswith('?'):
           s[0] = s[0] + '.'
+        sfout.write('{} Answer:\t{}\t{}\n'.format(s[0], s[1], s[2]))
+        tfout.write('{}\n'.format(t))
         if i % inter == 0:
           prev = t
         elif i % inter in active:
           sfout.write('{} Intermediate answer:\t{}\t{}\n'.format(s[0], s[1], s[2]))
           tfout.write('{}\n'.format(prev))
-        sfout.write('{} Answer:\t{}\t{}\n'.format(s[0], s[1], s[2]))
-        tfout.write('{}\n'.format(t))
 
   elif args.task == 'get_path_data_nq':
     inverse = True
@@ -2385,13 +2472,13 @@ if __name__ == '__main__':
         ts = t.split('\t')
         if not ts[1].endswith('.') and not ts[1].endswith('?'):
           ts[1] = ts[1] + '.'
+        fout.write('{}\t{}\t{}\t{}\n'.format(ind, '{} Answer:'.format(ts[1]), ts[2], 0))
+        ind += 1
         if i % inter == 0:
           prev = ts[2]
         elif i % inter in active:
           fout.write('{}\t{}\t{}\t{}\n'.format(ind, '{} Intermediate answer:'.format(ts[1]), prev, 0))
           ind += 1
-        fout.write('{}\t{}\t{}\t{}\n'.format(ind, '{} Answer:'.format(ts[1]), ts[2], 0))
-        ind += 1
 
   elif args.task == 'consist_compare_four':
     follow_file1, e2e_file1, follow_file2, e2e_file2, source_file, target_file = args.input
@@ -2413,3 +2500,20 @@ if __name__ == '__main__':
         split = nfin.readline().rstrip('\n').split('\t')
         title, body, _, _ = split
         fout.write('{}\t{}\t{}\n'.format(question, title, body))
+
+  elif args.task == 'get_gold_context_data_nq':
+    se = SlingExtractor()
+    os.environ['STANFORD_HOME'] = '/home/jzb/stanford'
+    se.load_stanford_nlp()
+    source_file, target_file = args.input
+    output_file = args.output
+    get_gold_context_data_nq(source_file, target_file, output_file, se)
+
+  elif args.task == 'rag2nq_format':
+    source_file, target_file = args.input
+    output_file = args.output
+    rag2nq_format(source_file, target_file, output_file)
+
+  elif args.task == 'statement_analysis':
+    source_file, target_file, source_file_raw, pred_file = args.input
+    statement_analysis(source_file, target_file, source_file_raw, pred_file)

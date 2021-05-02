@@ -138,15 +138,16 @@ class Break(object):
 
 
 class PseudoBreak(object):
-  def __init__(self, domains: List[str], source_target_files: List[Tuple[str, str]], num_hop: int=2, has_multihop: bool=False):
+  def __init__(self, domains: List[str], source_target_files: List[Tuple[str, str]], num_hop: int=2, multihop_count: int=0):
     print('loading PseudoBreak ...')
     self.domains = domains
     self.max_hop = num_hop
-    self.has_multihop = has_multihop
-    self.data = self.load_source_target(domains, source_target_files, num_hop=num_hop, has_multihop=has_multihop)
+    self.num_hop = num_hop
+    self.multihop_count = multihop_count
+    self.data = self.load_source_target(domains, source_target_files)
 
 
-  def load_source_target(self, domains: List[str], source_target_files: List[Tuple[str, str]], num_hop: int=2, has_multihop: bool=False) -> Dict:
+  def load_source_target(self, domains: List[str], source_target_files: List[Tuple[str, str]]) -> Dict:
     data = defaultdict(dict)
     assert len(domains) == len(source_target_files)
     for domain, (sf, tf) in zip(domains, source_target_files):
@@ -154,11 +155,11 @@ class PseudoBreak(object):
         for i, source in enumerate(sfin):
           source = source.rstrip('\n')
           target = tfin.readline().rstrip('\n')
-          qid = i // (num_hop + int(has_multihop))
+          qid = i // (self.num_hop + self.multihop_count)
           key = '{}-{}'.format(domain, qid)
           data[key]['question_id'] = key
           data[key]['domain'] = domain
-          if has_multihop and i % (num_hop + 1) == num_hop:  # multihop
+          if self.multihop_count and i % (self.num_hop + self.multihop_count) >= self.num_hop:  # multihop
             data[key]['question_text'] = source
             data[key]['answers'] = target
           else:  # single hop
