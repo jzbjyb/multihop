@@ -19,15 +19,19 @@ class CWQSnippet(object):
   @staticmethod
   def merge(list1, list2):
     result = []
+    merge_inds = []
     min_len = min(len(list1), len(list2))
     for i in range(min_len):
       if np.random.rand() > 0.5:
         result.append(list1[i])
         result.append(list2[i])
+        merge_inds.extend([1, 2])
       else:
         result.append(list2[i])
         result.append(list1[i])
+        merge_inds.extend([2, 1])
     result = result + list1[min_len:] + list2[min_len:]
+    assert len(result) == len(list1) + len(list2)
     return result
 
 
@@ -99,20 +103,28 @@ class WebQuestion(object):
   def __init__(self, root_dir: str):
     print('loading WebQuestion ...')
     self.numparses2count = defaultdict(lambda: 0)
+    self.dup_count = 0
     for split, file in [('train', 'WebQSP/data/WebQSP.train.json'), ('test', 'WebQSP/data/WebQSP.test.json')]:
       file = os.path.join(root_dir, file)
       if not os.path.exists(file):
         continue
       setattr(self, split, self.load_split(file))
+    print('dup count {}'.format(self.dup_count))
 
-
-  def load_split(self, filename: str) -> Dict[str, Any]:
+  def load_split(self, filename: str, dedup_ans: bool=True) -> Dict[str, Any]:
     with open(filename, 'r') as fin:
       result = {}
       data = json.load(fin)['Questions']
       for ex in data:
         self.numparses2count[len(ex['Parses'])] += 1
         answers = [a['EntityName'] or a['AnswerArgument'] for a in ex['Parses'][0]['Answers']]
+        if dedup_ans:
+          new_answers = []
+          for a in answers:
+            if a not in new_answers:
+              new_answers.append(a)
+          self.dup_count += int(len(new_answers) < len(answers))
+          answers = new_answers
         result[ex['QuestionId']] = {
           'id': ex['QuestionId'],
           'question': ex['ProcessedQuestion'],
@@ -132,24 +144,39 @@ class ComplexWebQuestion(object):
   def __init__(self, root_dir: str, webq: WebQuestion=None):
     print('loading ComplexWebQuestion ...')
     self.webq = webq
+    self.dup_count = 0
     for split, file in [('train', '1_1/ComplexWebQuestions_train.json'),
                         ('dev', '1_1/ComplexWebQuestions_dev.json')]:
       file = os.path.join(root_dir, file)
       if not os.path.exists(file):
         continue
       setattr(self, split, self.load_split(file))
+    print('dup count {}'.format(self.dup_count))
 
 
-  def load_split(self, filename: str) -> Dict[str, Any]:
+  def load_split(self, filename: str, dedup_ans: bool=True) -> Dict[str, Any]:
     with open(filename, 'r') as fin:
       result = {}
       data = json.load(fin)
       for ex in data:
         dedup_answers = []
+        answer_ids = set()
+        answer_sets = set()
         for anss in ex['answers']:
+          if dedup_ans and anss['answer_id'] in answer_ids:
+            continue
+          else:
+            answer_ids.add(anss['answer_id'])
           ans: str = anss['answer'] or anss['answer_id']
           alias: List[str] = anss['aliases']
-          dedup_answers.append([ans] + list(set(alias) - {ans}))
+          all_ans: List[str] = [ans] + list(set(alias) - {ans})
+          key = all_ans[0]
+          if dedup_ans and key in answer_sets:
+            continue
+          else:
+            answer_sets.add(key)
+          dedup_answers.append(all_ans)
+        self.dup_count += int(len(dedup_answers) < len(ex['answers']))
         result[ex['ID']] = {
           'id': ex['ID'],
           'type': ex['compositionality_type'],
@@ -169,7 +196,7 @@ class ComplexWebQuestion(object):
     multi_a = cwq['answers']
     sec_a_f = MultihopQuestion.format_multi_answers_with_alias(sec_a, only_first_alias=True)
     multi_a_f = MultihopQuestion.format_multi_answers_with_alias(multi_a, only_first_alias=True)
-    assert sec_a_f == multi_a_f, 'answer inconsistent:\n{}\n{}'.format(sec_a_f, multi_a_f)
+    assert sec_a_f == multi_a_f, '{} answer inconsistent:\n{}\n{}'.format(cwq['id'], sec_a_f, multi_a_f)
     sec_a = multi_a  # use alias
     for i in range(len(sec_q)):
       if sec_q[i] != cwq['machine_question'][i]:

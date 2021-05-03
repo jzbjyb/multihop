@@ -288,6 +288,37 @@ def mix_pos_neg(pos_docs, neg_docs, neg_max_token: int=None):
   return combine_title, combine_body
 
 
+def find_topk_retrieval(source_file, ret_file, output_file, topk=2, shuffle=False, num_hop: int=2):
+  with open(source_file, 'r') as sfin, \
+    open(ret_file, 'r') as rfin, \
+    open(output_file, 'w') as fout:
+    prev = []
+    for i, l in enumerate(sfin):
+      question = l.strip().split('\t')[0]
+      docs = rfin.readline()
+      docs = docs.strip().split('\t')[:-1]
+      docs = [doc.split(' || ', 2) for doc in docs]
+      docs = docs[:topk]
+      titles = [doc[1] for doc in docs]
+      bodys = [doc[2] for doc in docs]
+      if i % (num_hop + 1) < num_hop:
+        prev.append((question, titles, bodys))
+      else:  # multihop
+        h1, h1ts, h1bs = prev[-2]
+        h2, h2ts, h2bs = prev[-1]
+        if shuffle:
+          hts = CWQSnippet.merge(h1ts, h2ts)
+          hbs = CWQSnippet.merge(h1bs, h2bs)
+        else:
+          hts = h1ts + h2ts
+          hbs = h1bs + h2bs
+        comb_title = ' '.join(hts)
+        comb_body =  ' '.join(hbs)
+        fout.write('{}\t{}\t{}\n'.format(h1, comb_title, comb_body))
+        fout.write('{}\t{}\t{}\n'.format(h2, comb_title, comb_body))
+        fout.write('{}\t{}\t{}\n'.format(question, comb_title, comb_body))
+
+
 def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, output_file: str,
                         num_gold: int=1, num_neg: int=0, num_hop: int=2):
   if num_neg > 0 and num_gold != 1:
@@ -1374,9 +1405,9 @@ if __name__ == '__main__':
     'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'compare', 'ner', 'ner_replace',
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'subset',
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
-    'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter',
+    'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter', 'topk_ret',
     'convert_unifiedqa_ol', 'break_unifiedqa_output', 'filter_hotpotqa',
-    'combine_split', 'combine_multi_targets', 'replace_hop',
+    'combine_split', 'combine_multi_targets', 'dedup_multi_targets', 'replace_hop',
     'find_target', 'convert_to_reducehop', 'convert_to_reducehop_uq',
     'eval_json', 'consistency_data', 'explicit_data', 'implicit_data',
     'implicit_data_with_explicit', 'implicit_data_with_normal', 'normal_data_with_explicit',
@@ -1440,7 +1471,7 @@ if __name__ == '__main__':
           tfout.write('{}\n'.format(mh['a']))
 
   elif args.task == 'cwq':
-    use_ph = True
+    use_ph = False
     wq = WebQuestion('../Break/break_dataset/QDMR/webqsp')
     cwq = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq', webq=wq)
     with open(args.output + '.id', 'w') as ifout,\
@@ -2123,6 +2154,11 @@ if __name__ == '__main__':
     num_neg = 2
     find_gold_retrieval(source_file, target_file, ret_file, output_file, num_gold=num_gold, num_neg=num_neg)
 
+  elif args.task == 'topk_ret':
+    source_file, ret_file = args.input
+    output_file = args.output
+    find_topk_retrieval(source_file, ret_file, output_file, topk=2, shuffle=True)
+
   elif args.task == 'gold_ret_compare':
     source_file, target_file, pred_file, ret_pred_file, ret_file_id = args.input[:5]
     gold_pred_file = args.input[5] if len(args.input) > 5 else None
@@ -2157,6 +2193,27 @@ if __name__ == '__main__':
         fout.write(t + '\n')
     os.remove(target_file)
     os.rename(target_file + '.new', target_file)
+
+  elif args.task == 'dedup_multi_targets':
+    target_file = args.input[0]
+    has_dup = total = 0
+    with open(target_file, 'r') as fin, open(target_file + '.new', 'w') as fout:
+      for l in fin:
+        total += 1
+        t = l.strip().split(join_sep)
+        nt = []
+        has = False
+        for tt in t:
+          if tt not in nt:
+            nt.append(tt)
+          else:
+            has = True
+        has_dup += int(has)
+        nt = join_sep.join(nt)
+        fout.write(nt + '\n')
+    os.remove(target_file)
+    os.rename(target_file + '.new', target_file)
+    print('{} out of {} has dup'.format(has_dup, total))
 
   elif args.task == 'find_target':
     source_file, id_file, target_file, type_file = args.input
