@@ -446,7 +446,7 @@ class SlingExtractor(object):
           continue
         multi_q = '{} {} {}'.format(stat, self.property_names[pid], self.get_name(tailid))
       else:
-        multi_q = '{} and {} {}'.format(fir_q, self.property_names[pid], self.get_name(tailid))
+        multi_q = '{} and {} {}'.format(fir_q.strip().rstrip('?').rstrip('.'), self.property_names[pid], self.get_name(tailid))
       multi_a = sec_a
       mq = MultihopQuestion([{'q': fir_q, 'a': fir_a}, {'q': sec_q, 'a': sec_a}],
                             {'q': multi_q, 'a': multi_a}, ind=question['id'], op='filter')
@@ -629,17 +629,17 @@ class SlingExtractor(object):
     return [mq]
 
 
-  def extend(self, question: Dict, op: str, question2: Dict=None) -> List:
+  def extend(self, question: Dict, op: str, question2: Dict=None, run_el: bool=True) -> List:
     if op == 'project_in':
-      return self.extend_project_in(question, sample_n=5, use_qa_pairs=True, run_el=False)
+      return self.extend_project_in(question, sample_n=5, use_qa_pairs=True, run_el=run_el)
     if op == 'project_out':
       return self.extend_project_out(question, sample_n=2)
     if op == 'filter':
-      return self.extend_filter(question, sample_n=5, ques2stat=True, run_el=False)
+      return self.extend_filter(question, sample_n=5, ques2stat=False, run_el=run_el)
     if op == 'agg':
       return self.extend_agg(question, sample_n=1)
     if op == 'superlative':
-      return self.extend_superlative(question, sample_n=2, ques2stat=True, run_el=False)
+      return self.extend_superlative(question, sample_n=5, ques2stat=True, run_el=run_el)
     if op == 'union':
       return self.extend_union(question, question2)
     if op == 'intersection':

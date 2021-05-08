@@ -53,7 +53,7 @@ CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
     --max_grad_norm 0.1 \
     --lr_scheduler polynomial \
     --learning_rate 3e-05 \
-    --num_train_epochs 5 \
+    --num_train_epochs 10 \
     --warmup_steps 500 \
     --gradient_accumulation_steps 1 \
     --retrieval_mode ${mode} \

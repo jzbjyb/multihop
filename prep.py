@@ -172,7 +172,7 @@ def traverse(se: SlingExtractor, outdir: str, max_id: int=50000, train_sample_nu
     print(sorted(pid2count.items(), key=lambda x: -x[1])[:10])
 
 
-def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: List[str], action: str='extend'):
+def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: List[str], action: str='extend', exclude_ids: Set[str]=set(), max_same_ans_questions: int=30):
   set_ops = {'union', 'intersection'}
   count = 0
   build_index = len(set_ops & set(ops)) > 0
@@ -185,6 +185,9 @@ def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: L
   with open(question_file, 'r') as fin, open(output_file, 'w') as fout:
     for l in tqdm(fin):
       question = json.loads(l)
+      qid = '-'.join(question['id'].rsplit('-', 2)[-2:])
+      if qid in exclude_ids:
+        continue
       if build_index:
         for a in question['answers']:
           ans2ques[a].append(question)
@@ -201,7 +204,10 @@ def to_multihop(question_file: str, output_file: str, se: SlingExtractor, ops: L
 
     used_question_pairs: Set[Tuple[str, str]] = set()
     if build_index:
-      for _, questions in ans2ques.items():
+      for _, questions in tqdm(ans2ques.items()):
+        if len(questions) > max_same_ans_questions:
+          shuffle(questions)
+          questions = questions[:max_same_ans_questions]
         for i in range(len(questions)):
           for j in range(i + 1, len(questions)):
             q1, q2 = questions[i], questions[j]
@@ -321,6 +327,7 @@ def find_topk_retrieval(source_file, ret_file, output_file, topk=2, shuffle=Fals
 
 def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, output_file: str,
                         num_gold: int=1, num_neg: int=0, num_hop: int=2):
+  wrong_count = 0
   if num_neg > 0 and num_gold != 1:
     raise Exception('should be only on positive when concatenated with negative docs')
   pos2gold: Dict[int, int] = defaultdict(lambda: 0)
@@ -332,10 +339,11 @@ def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, outpu
     open(ret_file, 'r') as rfin, \
     open(output_file, 'w') as fout, \
     open(output_file + '.id', 'w') as ifout:
-    for id, l in enumerate(sfin):
+    for id, l in tqdm(enumerate(sfin)):
       question = l.strip().split('\t')[0]
       answers = [ans.split(alias_sep) for ans in tfin.readline().strip().split(ans_sep)]
       docs = rfin.readline()
+      raw_docs = docs
       if docs == '':
         break
       docs = docs.strip().split('\t')[:-1]
@@ -350,6 +358,9 @@ def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, outpu
         pos_docs = []
         neg_docs = []
         for i, doc in enumerate(docs):
+          if len(doc) != 3:
+            wrong_count += 1
+            continue
           find_all = True
           for answer in answers:
             find = False
@@ -389,6 +400,7 @@ def find_gold_retrieval(source_file: str, target_file: str, ret_file: str, outpu
   print('#gold -> portion')
   for k, v in sorted(hasgold2count.items(), key=lambda x: x[0]):
     print('{}\t{:.3f}'.format(k, v / total))
+  print('wrong_count {}'.format(wrong_count))
 
 
 def gold_retrieval_compare(source_file: str, target_file: str, pred_file: str,
@@ -807,8 +819,12 @@ def get_implicit_data(source_file, target_file, output_source_file, output_targe
           sfout.write('{}\t{}\t{}\t{}\n'.format(mhq, sh2, sp[1], sp[2]))
           sfout.write('{}\t{}\t{}\t{}\n'.format(shq, '#', sp[1], sp[2]))
         else:
-          sfout.write('{}\t{}\t{}\n'.format(mhq, sp[1], sp[2]))
-          sfout.write('{}\t{}\t{}\n'.format(shq, sp[1], sp[2]))
+          if len(sp) > 1:
+            sfout.write('{}\t{}\t{}\n'.format(mhq, sp[1], sp[2]))
+            sfout.write('{}\t{}\t{}\n'.format(shq, sp[1], sp[2]))
+          else:
+            sfout.write('{}\n'.format(mhq))
+            sfout.write('{}\n'.format(shq))
         tfout.write(target + '\n')
         tfout.write(target + '\n')
         shs = []
@@ -821,7 +837,10 @@ def get_implicit_data(source_file, target_file, output_source_file, output_targe
         if with_consist:
           sfout.write('{}\t{}\t{}\t{}\n'.format(raw_sh, '#', sp[1], sp[2]))
         else:
-          sfout.write('{}\t{}\t{}\n'.format(raw_sh, sp[1], sp[2]))
+          if len(sp) > 1:
+            sfout.write('{}\t{}\t{}\n'.format(raw_sh, sp[1], sp[2]))
+          else:
+            sfout.write('{}\n'.format(raw_sh))
         tfout.write(target + '\n')
 
 
@@ -1024,7 +1043,7 @@ def consist_compare_four(follow_file1, e2e_file1, follow_file2, e2e_file2, sourc
   print('1 consist {}, 2 consist {}'.format(len(consist1_cases), len(consist2_cases)))
 
 
-def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file=None, skip: int=0, num_hop: int=2, se: SlingExtractor=None, path: bool=False, path_inverse: bool=True):
+def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, id_file, out_file=None, skip: int=0, num_hop: int=2, se: SlingExtractor=None, path: bool=False, path_inverse: bool=True, cwq: ComplexWebQuestion=None):
   def get_major_type(names: List[str]):
     if se is None:
       return None
@@ -1041,20 +1060,30 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
   pes = []
   ss = []
   ts = []
+  pes_inter = []
+  qtypes = []
   with open(follow_file, 'r') as ffin, open(e2e_file, 'r') as efin, \
-    open(source_file, 'r') as sfin, open(target_file, 'r') as tfin:
+    open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(id_file, 'r') as ifin:
     for i, s in enumerate(sfin):
       pf = ffin.readline().strip().split('\t')[0]
       pe = efin.readline().strip().split('\t')[0]
+      qtype = ifin.readline().strip()
+      if cwq is not None:
+        qtype = cwq[qtype]['type']
+      else:
+        qtype = None
       if i % (num_hop + 1) == num_hop and skip:
+        pe_inter = ''
         for _ in range(skip):
-          _ = efin.readline()
+          pe_inter = efin.readline().strip().split('\t')[0]
+        pes_inter.append(pe_inter)
       s = s.strip()
       t = tfin.readline().strip()
       pfs.append(pf)
       pes.append(pe)
       ss.append(s)
       ts.append(t)
+      qtypes.append(qtype)
   p1s = pfs[0:len(pfs):3]
   p2s = pfs[1:len(pfs):3]
   pms = pes[2:len(pes):3]
@@ -1063,17 +1092,32 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
   sms = ss[2:len(ss):3]
   t1s = ts[0:len(ts):3]
   tms = ts[2:len(ts):3]
+  qtypes = qtypes[0:len(qtypes):3]
+  assert len(pes_inter) == len(pms)
   sames = []
-  all_sames = []
   ems = []
   f_ems = []
   e_ems = []
   all_cases = []
+  type2all_sames = defaultdict(list)
+  type2all_sames_inter = defaultdict(list)
+  numans2all_sames = defaultdict(lambda: defaultdict(list))
+  type2ems = defaultdict(lambda: {'hop1': [], 'hop2': [], 'multi': [], 'multi_inter': []})
   key2cases = defaultdict(list)
-  for p1, p2, pm, s1, s2, sm, t1, tm in zip(p1s, p2s, pms, s1s, s2s, sms, t1s, tms):
+  for p1, p2, pm, pm_inter, s1, s2, sm, t1, tm, qtype in zip(p1s, p2s, pms, pes_inter, s1s, s2s, sms, t1s, tms, qtypes):
     f1_em = evaluation(p1, t1)
     f_em = evaluation(p2, tm)
+    e_inter_em = evaluation(pm_inter, t1)
     e_em = evaluation(pm, tm)
+    type2ems[qtype]['hop1'].append(f1_em)
+    type2ems[qtype]['hop2'].append(f_em)
+    type2ems[qtype]['multi'].append(e_em)
+    type2ems[qtype]['multi_inter'].append(e_inter_em)
+    type2ems['*']['hop1'].append(f1_em)
+    type2ems['*']['hop2'].append(f_em)
+    type2ems['*']['multi'].append(e_em)
+    type2ems['*']['multi_inter'].append(e_inter_em)
+    p1sp = set(p1.lower().split(join_sep))
     p2sp = set(p2.lower().split(join_sep))
     if path:
       pmsp = set(pm.lower().split(path_sep)[-1].split(join_sep))
@@ -1081,7 +1125,11 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
       pmsp = set(pm.lower().split(path_inverse_sep)[0].split(join_sep))
     else:
       pmsp = set(pm.lower().split(join_sep))
+    pm_inter_sp = set(pm_inter.lower().split(join_sep))
     same = p2sp == pmsp
+    same = same or (f_em and e_em)
+    same_inter = p1sp == pm_inter_sp
+    same_inter = same_inter or (f1_em and e_inter_em)
     tm_type = get_major_type([a for ans in tm.split(ans_sep) for a in ans.split(alias_sep)])
     p2_type = get_major_type(p2sp)
     pm_type = get_major_type(pmsp)
@@ -1097,7 +1145,13 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
     e_ems.append(e_em)
     if not f_em or not e_em:
       sames.append(same)
-    all_sames.append(same or (f_em and e_em))
+    type2all_sames[qtype].append(same)
+    type2all_sames['*'].append(same)
+    type2all_sames_inter[qtype].append(same_inter)
+    type2all_sames_inter['*'].append(same_inter)
+    num_ans = len(tm.split(ans_sep))  # max(len(tm.split(ans_sep)), len(t1.split(ans_sep)))
+    numans2all_sames[qtype][num_ans].append(same)
+    numans2all_sames['*'][num_ans].append(same)
   if out_file:
     ind = 0
     with open(out_file, 'w') as fout:
@@ -1128,8 +1182,23 @@ def compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file
           fout.write('{}\thop2\t{}\t{}\t{}\t{}\t{}\n'.format(ind, s2, tm, p2, f_em, same))
           fout.write('{}\tmultihop\t{}\t{}\t{}\t{}\t{}\n'.format(ind, sm, tm, pm, e_em, same))
           ind += 1
-  print('consist {}, consist all {}, all em {:.2f}, follow em {:.2f}, e2e em {:.2f}'.format(
-    np.mean(sames), np.mean(all_sames), np.mean(ems) * 100, np.mean(f_ems) * 100, np.mean(e_ems) * 100))
+  print('consist {}, all em {:.2f}, follow em {:.2f}, e2e em {:.2f}'.format(
+    np.mean(sames), np.mean(ems) * 100, np.mean(f_ems) * 100, np.mean(e_ems) * 100))
+  type2all_sames = {k: '{:.2f}'.format(np.mean(v) * 100) for k, v in type2all_sames.items()}
+  type2all_sames_inter = {k: '{:.2f}'.format(np.mean(v) * 100) for k, v in type2all_sames_inter.items()}
+  type2ems = {k: {kk: '{:.2f}'.format(np.mean(vv) * 100) for kk, vv in v.items()} for k, v in type2ems.items()}
+  numans2all_sames_count = {k: {kk: len(vv) for kk, vv in v.items()} for k, v in numans2all_sames.items()}
+  numans2all_sames = {k: {kk: '{:.2f}'.format(np.mean(vv) * 100) for kk, vv in v.items()} for k, v in numans2all_sames.items()}
+  numans2all_sames_count_x, numans2all_sames_count_y = list(zip(*sorted(numans2all_sames_count['*'].items())))
+  numans2all_sames_x, numans2all_sames_y = list(zip(*sorted(numans2all_sames['*'].items())))
+  print('consist', type2all_sames)
+  print('consist intermediate', type2all_sames_inter)
+  print('num ans 2 consist')
+  print('\t'.join(map(str, numans2all_sames_x)))
+  print('\t'.join(map(str, numans2all_sames_y)))
+  print('\t'.join(map(str, numans2all_sames_count_x)))
+  print('\t'.join(map(str, numans2all_sames_count_y)))
+  print('em', type2ems)
   for key in sorted(key2cases.keys()):
     print(key, len(key2cases[key]))
 
@@ -1334,7 +1403,12 @@ def get_gold_context_data_nq(source_file, target_file, output_file, se, num_hop:
       if q.lower().startswith('return '):
         state = '{} is {}.'.format(q[6:].strip(), state_blank)
       else:
-        state = se.question2statement_parse(q, keep_ph=True)
+        try:
+          state = se.question2statement_parse(q, keep_ph=True)
+        except KeyboardInterrupt as e:
+          raise e
+        except:
+          state = None
       if state is None:
         rfout.write('*\n')
         prev.append(None)
@@ -1368,6 +1442,7 @@ def get_gold_context_data_nq(source_file, target_file, output_file, se, num_hop:
 def statement_analysis(source_file, target_file, source_file_raw, pred_file, inter: int=6):
   predictions = []
   golds = []
+  count = 0
   with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(source_file_raw, 'r') as srfin, open(pred_file, 'r') as pfin:
     for i, sr in enumerate(srfin):
       sr = sr.strip()
@@ -1377,26 +1452,61 @@ def statement_analysis(source_file, target_file, source_file_raw, pred_file, int
         continue
       s = sfin.readline().strip()
       t = tfin.readline().strip()
-      p = pfin.readline().strip()
+      p = pfin.readline().strip().split('\t')[0]
       predictions.append(p)
       golds.append(t)
-  mh_ems = []
-  sh_ems = []
+  h1_ems = []
+  h2_ems = []
+  mh_mh_ems = []
+  h1_mh_ems = []
+  h2_mh_ems = []
+  h12_mh_ems = []
   for i in range(0, len(predictions), inter):
     cur_preds = predictions[i:i + inter]
     cur_golds = golds[i:i + inter]
     if len(cur_preds) < inter:
       continue
-    mh_mh = cur_preds[2]
-    sh_mh = cur_preds[-1]
-    gold = cur_golds[-1]
-    if mh_mh is None or sh_mh is None:
+    if len([1 for p in cur_preds if p is None]) > 0:
       continue
-    mh_em = evaluation(mh_mh, gold)
-    sh_em = evaluation(sh_mh, gold)
-    mh_ems.append(mh_em)
-    sh_ems.append(sh_em)
-  print(np.mean(mh_ems), np.mean(sh_ems))
+    count += 1
+    h1, h2, mh_mh, h1_mh, h2_mh, h12_mh = cur_preds
+    h1g, h2g, mhg = cur_golds[:3]
+    h1_ems.append(evaluation(h1, h1g))
+    h2_ems.append(evaluation(h2, h2g))
+    mh_mh_ems.append(evaluation(mh_mh, mhg))
+    h1_mh_ems.append(evaluation(h1_mh, mhg))
+    h2_mh_ems.append(evaluation(h2_mh, mhg))
+    h12_mh_ems.append(evaluation(h12_mh, mhg))
+  for title, ems in [('h1', h1_ems), ('h2', h2_ems), ('mh_mh', mh_mh_ems),
+                     ('h1_mh', h1_mh_ems), ('h2_mh', h2_mh_ems), ('h12_mh', h12_mh_ems)]:
+    print('{} {:.2f}'.format(title, np.mean(ems) * 100))
+  print('total count {}'.format(count))
+
+
+def combine_synthetic(inputs, output_file, max_num: int=10000, min_num_ans: int=1, max_num_ans: int=30):
+  op2ls = defaultdict(list)
+  numans2count = defaultdict(lambda: 0)
+  for input_file in inputs:
+    with open(input_file, 'r') as fin:
+      for l in fin:
+        j = json.loads(l)
+        na = len(j['multi']['a'])
+        for single in j['single']:
+          na = max(na, len(single['a']))
+        if na < min_num_ans or na > max_num_ans:
+          continue
+        numans2count[na] += 1
+        op2ls[j['op']].append(l)
+  with open(output_file, 'w') as fout:
+    for op, ls in op2ls.items():
+      shuffle(ls)
+      if max_num:
+        ls = ls[:max_num]
+      for l in ls:
+        fout.write(l)
+  print('total', sum(numans2count.values()))
+  print('num answer 2 count', sorted(numans2count.items()))
+  print('op 2 count', sorted([(k, len(v)) for k, v in op2ls.items()]))
 
 
 if __name__ == '__main__':
@@ -1416,7 +1526,8 @@ if __name__ == '__main__':
     'compare_e2e_follow', 'consist_compare_four', 'only_firstsecond_context', 'generate_fake_statement', 'generate_negative_passage',
     'combine_context', 'get_path_data', 'get_hint_data', 'get_path_data_nq', 'get_hint_data_nq',
     'implicit_data_nq', 'explicit_data_nq', 'compare_two', 'get_snippet', 'combine_snippet',
-    'get_gold_context_data_nq', 'rag2nq_format', 'statement_analysis'], default='hotpotqa')
+    'get_gold_context_data_nq', 'rag2nq_format', 'statement_analysis',
+    'only_line', 'combine_synthetic'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1932,37 +2043,32 @@ if __name__ == '__main__':
   elif args.task == 'to_multihop':
     question_file = args.input
     se = get_se()
+    wq = WebQuestion('../Break/break_dataset/QDMR/webqsp')
+    cwq = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq', webq=wq)
+    exclude_ids = set(cwq.get_dev_wq_ids())
     to_multihop(question_file, args.output, se,
                 ops=['project_in', 'project_out', 'filter', 'agg', 'superlative', 'union', 'intersection'],
-                action='extend')
+                action='extend', exclude_ids=exclude_ids)
     to_multihop(question_file, args.output, se,
                 ops=['project_in', 'union', 'intersection'],
-                action='add_another')
+                action='add_another', exclude_ids=exclude_ids)
 
   elif args.task == 'format':
     with open(args.input[0], 'r') as fin, \
       open(args.output + '.source', 'w') as sfout, \
       open(args.output + '.target', 'w') as tfout, \
       open(args.output + '.op', 'w') as ofout:
-      maxu = maxi = 0
       for l in fin:
         mhq = MultihopQuestion.fromstr(l)
         op = mhq.kwargs['op']
-        if op == 'union':
-          if maxu >= 500:
-            continue
-          maxu += 1
-        if op == 'intersection':
-          if maxi >= 500:
-            continue
-          maxi += 1
+        assert len(mhq.single_hops) == 2
         for sh in mhq.single_hops:
           sfout.write(sh['q'] + '\n')
-          tfout.write('\t'.join(sh['a']) + '\n')
+          tfout.write(ans_sep.join(sh['a']) + '\n')
           ofout.write(op + '\n')
         mh = mhq.multi_hop
         sfout.write(mh['q'] + '\n')
-        tfout.write('\t'.join(mh['a']) + '\n')
+        tfout.write(ans_sep.join(mh['a']) + '\n')
         ofout.write(op + '\n')
 
   elif args.task == 'format_sh_mh':
@@ -2408,11 +2514,12 @@ if __name__ == '__main__':
   elif args.task == 'compare_e2e_follow':
     #se = SlingExtractor()
     #se.load_kb(root_dir='/home/zhengbaj/tir4/sling/local/data/e/wiki')
+    cwq = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq', webq=WebQuestion('../Break/break_dataset/QDMR/webqsp'))
     se = None
-    follow_file, e2e_file, source_file, target_file, skip = args.input
+    follow_file, e2e_file, source_file, target_file, id_file, skip = args.input
     skip = int(skip)
     out_file = args.output
-    compare_e2e_follow(follow_file, e2e_file, source_file, target_file, out_file, se=se, skip=skip)
+    compare_e2e_follow(follow_file, e2e_file, source_file, target_file, id_file, out_file, se=se, skip=skip, cwq=cwq)
 
   elif args.task == 'only_firstsecond_context':
     source_file, = args.input
@@ -2574,3 +2681,18 @@ if __name__ == '__main__':
   elif args.task == 'statement_analysis':
     source_file, target_file, source_file_raw, pred_file = args.input
     statement_analysis(source_file, target_file, source_file_raw, pred_file)
+
+  elif args.task == 'only_line':
+    input_file, = args.input
+    output_file = args.output
+    inter = 4
+    lines = {0, 1, 3}
+    with open(input_file, 'r') as fin, open(output_file, 'w') as fout:
+      for i, l in enumerate(fin):
+        if i % inter in lines:
+          fout.write(l)
+
+  elif args.task == 'combine_synthetic':
+    inputs = args.input
+    output_file = args.output
+    combine_synthetic(inputs, output_file, max_num=10000)

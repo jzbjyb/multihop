@@ -145,6 +145,7 @@ class ComplexWebQuestion(object):
     print('loading ComplexWebQuestion ...')
     self.webq = webq
     self.dup_count = 0
+    self.type2count = defaultdict(lambda: 0)
     for split, file in [('train', '1_1/ComplexWebQuestions_train.json'),
                         ('dev', '1_1/ComplexWebQuestions_dev.json')]:
       file = os.path.join(root_dir, file)
@@ -177,6 +178,7 @@ class ComplexWebQuestion(object):
             answer_sets.add(key)
           dedup_answers.append(all_ans)
         self.dup_count += int(len(dedup_answers) < len(ex['answers']))
+        self.type2count[ex['compositionality_type']] += 1
         result[ex['ID']] = {
           'id': ex['ID'],
           'type': ex['compositionality_type'],
@@ -187,6 +189,10 @@ class ComplexWebQuestion(object):
           'webqsp_ID': ex['webqsp_ID'],
         }
       return result
+
+
+  def get_dev_wq_ids(self):
+    return [id.split('_', 1)[0] for id in self.dev.keys()]
 
 
   def decompose_composition(self, cwq: Dict, wq: Dict, use_ph: bool=False) -> MultihopQuestion:
