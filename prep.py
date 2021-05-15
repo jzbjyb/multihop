@@ -1509,6 +1509,83 @@ def combine_synthetic(inputs, output_file, max_num: int=10000, min_num_ans: int=
   print('op 2 count', sorted([(k, len(v)) for k, v in op2ls.items()]))
 
 
+def filter_by_mask(input_file, mask_file, outut_file, id_file=None):
+  if id_file is None:
+    with open(input_file, 'r') as ifin, open(mask_file, 'r') as mfin, open(outut_file, 'w') as fout:
+      for i, l in enumerate(ifin):
+        if int(mfin.readline().strip()):
+          fout.write(l)
+  else:
+    with open(input_file, 'r') as ifin, open(mask_file, 'r') as mfin, open(id_file, 'r') as idfin, open(outut_file, 'w') as fout:
+      i2mask = {}
+      for i, l in enumerate(mfin):
+        i2mask[i] = int(l.strip())
+      for i, l in enumerate(ifin):
+        if i2mask[int(idfin.readline().strip())]:
+          fout.write(l)
+
+
+def replace_with_placeholder(source_file, target_file, source_out_file, target_out_file, raw_q_file, ph_q_file):
+  q2qp = {}
+  with open(raw_q_file, 'r') as rfin, open(ph_q_file, 'r') as pfin:
+    for i, q in enumerate(rfin):
+      q = q.strip()
+      p = pfin.readline().strip()
+      if i % 3 == 1:
+        assert '#1' in p
+        q2qp[q] = p
+  prev_s = []
+  prev_t = []
+  with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(source_out_file, 'w') as sfout, open(target_out_file, 'w') as tfout:
+    for i, s in enumerate(sfin):
+      s = s.strip().split('\t')
+      t = tfin.readline().strip()
+      if i % 3 == 0:
+        valid = True
+      elif i % 3 == 1:
+        if s[0].lower().startswith('which one of the following '):
+          s[0] = s[0].split(':', 1)[0] + ': #1?'
+        else:
+          tc = truecase.get_true_case(s[0])
+          if tc in q2qp:
+            s[0] = q2qp[tc]
+          else:
+            valid = False
+      else:
+        if not valid:
+          continue
+        else:
+          s[0] = '{} {}'.format(prev_s[-2][0], prev_s[-1][0])
+          sfout.write('{}\n'.format('\t'.join(prev_s[-2])))
+          tfout.write('{}\n'.format(prev_t[-2]))
+          sfout.write('{}\n'.format('\t'.join(prev_s[-1])))
+          tfout.write('{}\n'.format(prev_t[-1]))
+          sfout.write('{}\n'.format('\t'.join(s)))
+          tfout.write('{}\n'.format(t))
+      prev_s.append(s)
+      prev_t.append(t)
+
+
+def get_hotpotqa_subq(root_dir, source_file, target_file):
+  raw_file = os.path.join(root_dir, 'dev_ori.json')
+  sub1_file = os.path.join(root_dir, 'dev_sub1.json')
+  sub2_file = os.path.join(root_dir, 'dev_sub2.json')
+  with open(raw_file, 'r') as rfin, open(sub1_file, 'r') as s1fin, open(sub2_file, 'r') as s2fin, \
+    open(source_file, 'w') as sfout, open(target_file, 'w') as tfout:
+    raw = json.load(rfin)
+    sub1 = json.load(s1fin)
+    sub2 = json.load(s2fin)
+    for r, s1, s2 in zip(raw, sub1, sub2):
+      assert s1['_id'].split('_')[0] == r['_id']
+      assert s2['_id'].split('_')[0] == r['_id']
+      sfout.write('{}\n'.format(s1['question'].strip()))
+      tfout.write('{}\n'.format(s1['answer'].strip()))
+      sfout.write('{}\n'.format(s2['question'].strip()))
+      tfout.write('{}\n'.format(s2['answer'].strip()))
+      sfout.write('{}\n'.format(r['question'].strip()))
+      tfout.write('{}\n'.format(r['answer'].strip()))
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
@@ -1527,7 +1604,8 @@ if __name__ == '__main__':
     'combine_context', 'get_path_data', 'get_hint_data', 'get_path_data_nq', 'get_hint_data_nq',
     'implicit_data_nq', 'explicit_data_nq', 'compare_two', 'get_snippet', 'combine_snippet',
     'get_gold_context_data_nq', 'rag2nq_format', 'statement_analysis',
-    'only_line', 'combine_synthetic'], default='hotpotqa')
+    'only_line', 'combine_synthetic', 'get_subset_synthetic',
+    'filter_by_mask', 'replace_with_placeholder', 'get_hotpotqa_subq'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1714,6 +1792,7 @@ if __name__ == '__main__':
     pred_file, source_file, target_file, add_file = args.input[:4]
     score_file = args.input[4] if len(args.input) > 4 else source_file
     ems = []
+    cate2hop2numans = defaultdict(lambda: defaultdict(list))
     ems_first = []
     ems_first_sh = []
     ems_first_mh = []
@@ -1761,16 +1840,19 @@ if __name__ == '__main__':
         em_li = [evaluation(pred, targets, eval_mode=args.eval_mode) for pred in preds]
         em = max(em_li)
         ems.append(em)
+        which_hop = (i // args.num_para) % len(numhops2temps[args.num_hops])
+        if type(addtion_res) is ComplexWebQuestion:
+          cate = addtion_res[addition]['type']
+        elif callable(addtion_res):
+          cate = addtion_res(addition)
+        else:
+          cate = ''
+        cate2hop2numans[cate][which_hop].append(len(set(targets.split(ans_sep))))
         ems_first.append(em_li[0])
-        if (i // args.num_para) % len(numhops2temps[args.num_hops]) == 0:
+        if which_hop == 0:
           groups.append([])
           cases.append([])
-          if type(addtion_res) is ComplexWebQuestion:
-            cates.append(addtion_res[addition]['type'])
-          elif callable(addtion_res):
-            cates.append(addtion_res(addition))
-          else:
-            cates.append('')
+          cates.append(cate)
         if (i // args.num_para) % len(numhops2temps[args.num_hops]) == args.num_hops:  # multihop
           #if len(source.split('\t')) == 4:
           ems_first_mh.append(em)
@@ -1800,12 +1882,16 @@ if __name__ == '__main__':
 
     non_cate: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
     non_cate_case: Dict[str, Dict[str, List]] = defaultdict(lambda: defaultdict(list))
+    non_cate_em: Dict[str, Dict[str, List[int]]] = defaultdict(lambda: defaultdict(list))
     para_cate: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
     np_cate: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(lambda: 0))
 
     for group, case, cate in zip(groups, cases, cates):
       key = '{:d}{:d}-{:d}'.format(group['n-*'], group['*-n'], group['n-n'])
       non_cate[cate][key] += 1
+      non_cate_em[cate][0].append(group['n-*'])
+      non_cate_em[cate][1].append(group['*-n'])
+      non_cate_em[cate][2].append(group['n-n'])
       non_cate_case[cate][key].append(case)
       non_cate['*'][key] += 1
       non_cate_case['*'][key].append(case)
@@ -1817,6 +1903,15 @@ if __name__ == '__main__':
           np_cate[cate]['np-{:d}'.format(group['n-p'])] += 1
         if group['p-*'] and group['*-n']:
           np_cate[cate]['pn-{:d}'.format(group['p-n'])] += 1
+
+    print('#cate->hop->numans')
+    for which_hop in range(len(numhops2temps[args.num_hops])):
+      avg_num_ans = np.mean(cate2hop2numans['comparative'][which_hop] + cate2hop2numans['superlative'][which_hop] + cate2hop2numans['conjunction'][which_hop])
+      print(which_hop, avg_num_ans)
+
+    for cate, v in non_cate_em.items():
+      print('Cate:', cate)
+      print([(k, '{:.2f}'.format(np.mean(vv) * 100)) for k, vv in v.items()])
 
     printstat(non_cate)
     printstat(non_cate, norm=True)
@@ -2696,3 +2791,45 @@ if __name__ == '__main__':
     inputs = args.input
     output_file = args.output
     combine_synthetic(inputs, output_file, max_num=10000)
+
+  elif args.task == 'get_subset_synthetic':
+    wq = WebQuestion('../Break/break_dataset/QDMR/webqsp')
+    cwq = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq', webq=wq)
+    ids = set(cwq.get_train_wq_ids(with_type=True))
+    input_file, = args.input
+    output_file = args.output
+    hit = miss = 0
+    with open(input_file, 'r') as fin, open(output_file, 'w') as fout:
+      for l in fin:
+        mh = MultihopQuestion.fromstr(l.strip())
+        if not mh.ind.startswith('elq/EL4QA_data/WebQSP_EL/'):
+          fout.write('0\n0\n0\n')
+          continue
+        if mh.kwargs['op'] not in {'project_in', 'filter', 'superlative'}:
+          fout.write('0\n0\n0\n')
+          continue
+        id = '-'.join(mh.ind.rsplit('-', 2)[-2:]) + '#' + ComplexWebQuestion.BREAK2CWQ[mh.kwargs['op']]
+        if id in ids:
+          hit += 1
+          fout.write('1\n1\n1\n')
+        else:
+          miss += 1
+          fout.write('0\n0\n0\n')
+    print(hit, miss)
+
+  elif args.task == 'filter_by_mask':
+    input_file, mask_file = args.input[:2]
+    id_file = args.input[2] if len(args.input) > 2 else None
+    outut_file = args.output
+    filter_by_mask(input_file, mask_file, outut_file, id_file=id_file)
+
+  elif args.task == 'replace_with_placeholder':
+    raw_q_file, ph_q_file = 'complexwebq/train.source', 'complexwebq/train.placeholder.source'
+    source_file, target_file = args.input
+    source_out_file, target_out_file = source_file + '.placeholder.implicit.nomh', target_file + '.placeholder.implicit.nomh'
+    replace_with_placeholder(source_file, target_file, source_out_file, target_out_file, raw_q_file, ph_q_file)
+
+  elif args.task == 'get_hotpotqa_subq':
+    root_dir = args.input[0]
+    source_file, target_file = args.output + '.source', args.output + '.target'
+    get_hotpotqa_subq(root_dir, source_file, target_file)

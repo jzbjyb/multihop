@@ -141,6 +141,8 @@ class WebQuestion(object):
 
 
 class ComplexWebQuestion(object):
+  BREAK2CWQ = {'project_in': 'composition', 'filter': 'conjunction', 'superlative': 'superlative'}
+
   def __init__(self, root_dir: str, webq: WebQuestion=None):
     print('loading ComplexWebQuestion ...')
     self.webq = webq
@@ -193,6 +195,12 @@ class ComplexWebQuestion(object):
 
   def get_dev_wq_ids(self):
     return [id.split('_', 1)[0] for id in self.dev.keys()]
+
+
+  def get_train_wq_ids(self, with_type: bool=False):
+    if with_type:
+      return [id.split('_', 1)[0] + '#' + self.train[id]['type'] for id in self.train.keys()]
+    return [id.split('_', 1)[0] for id in self.train.keys()]
 
 
   def decompose_composition(self, cwq: Dict, wq: Dict, use_ph: bool=False) -> MultihopQuestion:
