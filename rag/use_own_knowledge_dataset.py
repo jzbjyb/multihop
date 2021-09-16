@@ -5,10 +5,11 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import List, Optional
-import numpy as np
-import csv
+
 import torch
-from datasets import Features, Sequence, Value, load_dataset, Dataset
+import torch.nn as nn
+from torch.multiprocessing import Pool, set_start_method
+from datasets import Features, Sequence, Value, load_dataset, concatenate_datasets
 
 import faiss
 from transformers import (
@@ -24,7 +25,6 @@ from transformers import (
 logger = logging.getLogger(__name__)
 torch.set_grad_enabled(False)
 device = "cuda" if torch.cuda.is_available() else "cpu"
-emb_matrix = {'data': None, 'load_size': 1000000, 'current_ind': -1000000}
 
 
 def split_text(text: str, n=100, character=" ") -> List[str]:
@@ -44,30 +44,24 @@ def split_documents(documents: dict) -> dict:
     return {"title": titles, "text": texts}
 
 
-def embed(documents: dict, ctx_encoder: DPRContextEncoder, ctx_tokenizer: DPRContextEncoderTokenizerFast) -> dict:
+def embed(documents: dict, device, ctx_encoder: DPRContextEncoder, ctx_tokenizer: DPRContextEncoderTokenizerFast) -> dict:
     """Compute the DPR embeddings of document passages"""
     input_ids = ctx_tokenizer(
         documents["title"], documents["text"], truncation=True, padding="longest", return_tensors="pt"
     )["input_ids"]
-    embeddings = ctx_encoder(input_ids.to(device=device), return_dict=True).pooler_output
-    return {"embeddings": embeddings.detach().cpu().numpy()}
+    embeddings = ctx_encoder(input_ids=input_ids.to(device=device), return_dict=True).pooler_output
+    result = {"embeddings": embeddings.detach().cpu().numpy()}
+    return result
 
 
-def get_emb(documents: dict, idx: List[int]):
-    s = emb_matrix['load_size']
-    first = emb_matrix['current_ind']
-    last = first + s
-    fi = idx[0] if type(idx) is list else idx
-    if fi >= last:  # out of bound
-        print('refresh embedding from {} to {} ...'.format(last, last + s))
-        emb_matrix['data'] = np.load('/home/jzb/node09/exp/multihop_dense_retrieval/data/hotpot_index/wiki_index.npy').astype('float32')[last:last + s]
-        emb_matrix['current_ind'] = last
-    first = emb_matrix['current_ind']
-    if type(idx) is list:
-        idx = np.array(idx)
-    r = {'embeddings': emb_matrix['data'][idx - first]}
-    return r
-
+def shard_worker(split, ctx_tokenizer, batch_size, features):
+    dataset, device, ctx_encoder = split
+    return dataset.map(
+        partial(embed, device=device, ctx_encoder=ctx_encoder, ctx_tokenizer=ctx_tokenizer),
+        batched=True,
+        batch_size=batch_size,
+        features=features,
+    )
 
 def main(
     rag_example_args: "RagExampleArguments",
@@ -87,52 +81,43 @@ def main(
     # Let's say you have documents in tab-separated csv files with columns "title" and "text"
     assert os.path.isfile(rag_example_args.csv_path), "Please provide a valid path to a csv file"
 
-    print('load documents')
     # You can load a Dataset object this way
     dataset = load_dataset(
         "csv", data_files=[rag_example_args.csv_path], split="train", delimiter="\t", column_names=["title", "text"]
     )
-    '''
-    titles = []
-    texts = []
-    with open(rag_example_args.csv_path, 'r') as fin:
-        spamreader = csv.reader(fin, delimiter='\t')
-        for row in spamreader:
-            titles.append(row[0])
-            texts.append(row[1])
-            if emb_matrix['load_size'] and len(titles) >= emb_matrix['load_size']:
-                break
-    '''
 
     # More info about loading csv files in the documentation: https://huggingface.co/docs/datasets/loading_datasets.html?highlight=csv#csv-files
 
     # Then split the documents into passages of 100 words
-    #dataset = dataset.map(split_documents, batched=True, num_proc=processing_args.num_proc)
-
-    print('load embeddings')
-    get_emb(None, 0)  # warm up
-
-    '''
-    print('add embeddings')
-    new_features = Features(
-        {"text": Value("string"), "title": Value("string"), "embeddings": Sequence(Value("float32"))}
-    )
-    dataset = Dataset.from_dict({'title': titles, 'text': texts, 'embeddings': emb_matrix['data']}, features=new_features)
-    '''
+    dataset = dataset.map(split_documents, batched=True, num_proc=processing_args.num_proc)
+    print(f'#docs in the dataset {len(dataset)}')
 
     # And compute the embeddings
-    #ctx_encoder = DPRContextEncoder.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name).to(device=device)
-    #ctx_tokenizer = DPRContextEncoderTokenizerFast.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name)
+    num_gpus = torch.cuda.device_count()
+    ctx_encoder = DPRContextEncoder.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name)
+    ctx_tokenizer = DPRContextEncoderTokenizerFast.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name)
     new_features = Features(
         {"text": Value("string"), "title": Value("string"), "embeddings": Sequence(Value("float32"))}
     )  # optional, save as float32 instead of float64 to save space
-    dataset = dataset.map(
-        get_emb,
-        batched=True,
-        batch_size=processing_args.batch_size,
-        features=new_features,
-        with_indices=True
-    )
+    #processing_args.batch_size = processing_args.batch_size * num_gpus
+    print(f'#gpus {num_gpus}, batch_size {processing_args.batch_size}')
+    if num_gpus > 1:
+        shards = [dataset.shard(num_shards=num_gpus, index=rank, contiguous=True) for rank in range(num_gpus)]
+        devices = [torch.device(f'cuda:{rank}') for rank in range(num_gpus)]
+        replicas = nn.parallel.replicate(ctx_encoder.cuda(), devices)
+        pool = Pool(num_gpus)
+        shards = pool.map(partial(shard_worker, ctx_tokenizer=ctx_tokenizer, batch_size=processing_args.batch_size, features=new_features),
+                          [(shards[i], devices[i], replicas[i]) for i in range(num_gpus)])
+        dataset = concatenate_datasets(shards)
+    else:
+        ctx_encoder.to(device=device)
+        dataset = dataset.map(
+            partial(embed, device=torch.device('cuda'), ctx_encoder=ctx_encoder, ctx_tokenizer=ctx_tokenizer),
+            batched=True,
+            batch_size=processing_args.batch_size,
+            features=new_features,
+            num_proc=num_gpus
+        )
 
     # And finally save your dataset
     passages_path = os.path.join(rag_example_args.output_dir, "my_knowledge_dataset")
@@ -152,7 +137,6 @@ def main(
     index_path = os.path.join(rag_example_args.output_dir, "my_knowledge_dataset_hnsw_index.faiss")
     dataset.get_index("embeddings").save(index_path)
     # dataset.load_faiss_index("embeddings", index_path)  # to reload the index
-    return
 
     ######################################
     logger.info("Step 3 - Load RAG")
@@ -209,13 +193,13 @@ class RagExampleArguments:
 @dataclass
 class ProcessingArguments:
     num_proc: Optional[int] = field(
-        default=None,
+        default=16,
         metadata={
             "help": "The number of processes to use to split the documents into passages. Default is single process."
         },
     )
     batch_size: int = field(
-        default=1000,
+        default=64,
         metadata={
             "help": "The batch size to use when computing the passages embeddings using the DPR context encoder."
         },
@@ -229,7 +213,7 @@ class IndexHnswArguments:
         metadata={"help": "The dimension of the embeddings to pass to the HNSW Faiss index."},
     )
     m: int = field(
-        default=512,
+        default=128,
         metadata={
             "help": "The number of bi-directional links created for every new element during the HNSW index construction."
         },
@@ -237,6 +221,7 @@ class IndexHnswArguments:
 
 
 if __name__ == "__main__":
+    set_start_method('spawn')
     logging.basicConfig(level=logging.WARNING)
     logger.setLevel(logging.INFO)
 

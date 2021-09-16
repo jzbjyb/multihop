@@ -1805,8 +1805,11 @@ if __name__ == '__main__':
     if 'cwq' in pred_file or 'complexwebq' in pred_file:
       addtion_res = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq',
                                        webq=WebQuestion('../Break/break_dataset/QDMR/webqsp'))
-    if 'op' in add_file:
-      addtion_res = lambda x: x
+    if 'xfactr' in add_file:
+      if 'freq' in add_file:
+        addtion_res = lambda x: float(x)
+      else:
+        addtion_res = lambda x: x
 
     prev_targets = []
     with open(pred_file, 'r') as pfin, \
@@ -1909,9 +1912,8 @@ if __name__ == '__main__':
       avg_num_ans = np.mean(cate2hop2numans['comparative'][which_hop] + cate2hop2numans['superlative'][which_hop] + cate2hop2numans['conjunction'][which_hop])
       print(which_hop, avg_num_ans)
 
-    for cate, v in non_cate_em.items():
-      print('Cate:', cate)
-      print([(k, '{:.2f}'.format(np.mean(vv) * 100)) for k, vv in v.items()])
+    for cate, v in sorted(non_cate_em.items(), key=lambda x: -x[0]):
+      print(f'{cate}\t' + '\t'.join(['{:.2f}'.format(np.mean(vv) * 100) for k, vv in v.items()]))
 
     printstat(non_cate)
     printstat(non_cate, norm=True)
@@ -1925,6 +1927,7 @@ if __name__ == '__main__':
     if args.output in args.input:
       raise Exception('output exists')
 
+    num_cases = 20
     with open(args.output, 'w') as fout:
       for cate, cases in non_cate_case.items():
         fout.write('<h1>{}</h1>\n'.format(cate))
@@ -1932,7 +1935,7 @@ if __name__ == '__main__':
           fout.write('<h2>{}</h2>\n'.format(key))
           shuffle(case)
           fout.write('<h3>random cases</h3>\n')
-          for c in case[:5]:
+          for c in case[:num_cases]:
             fout.write('<br>\n')
             for s, t, p, e, scores in c:
               s = '<br>'.join(['{} ({:.2f}, {:.2f})'.format(_s.split('\t')[0], score[0], score[1]) for _s, score in zip(s, scores)])
