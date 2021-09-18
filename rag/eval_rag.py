@@ -21,7 +21,7 @@ from transformers import logging as transformers_logging
 
 sys.path.append(os.path.join(os.getcwd()))  # noqa: E402 # isort:skip
 from utils_rag import exact_match_score, f1_score, truncate_context_with_question  # noqa: E402 # isort:skip
-from rag_model import MyRagSequenceForGeneration
+from rag_model import MyRagSequenceForGeneration, MyRagRetriever
 from finetune_rag import GenerativeQAModule, root_to_mdr
 from dataset import Break, PseudoBreak
 
@@ -154,6 +154,9 @@ def evaluate_batch_retrieval_all(args, rag_model, questions):
 
 
 def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
+    if type(rag_model.retriever) is MyRagRetriever and args.retrieval_hop > 1:
+        raise Exception('MyRagRetriever is only used for single-hop retrieval')
+
     n_docs = rag_model.config.n_docs
     do_deduplication = rag_model.config.do_deduplication
     num_doc_return_sequences = rag_model.config.num_return_sequences
@@ -172,12 +175,14 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
         # retrieve
         for nh in range(args.retrieval_hop):
             question_hidden_states = rag_model.question_encoder(input_ids, attention_mask=attention_mask)[0]
+            add_kwargs = {'question_strings': questions} if type(rag_model.retriever) is MyRagRetriever else {}
             retriever_outputs = rag_model.retriever(
                 input_ids,
                 question_hidden_states.cpu().detach().to(torch.float32).numpy(),
                 prefix=rag_model.generator.config.prefix,
                 n_docs=n_docs,
                 return_tensors='pt',
+                **add_kwargs
             )
             context_input_ids, context_attention_mask, retrieved_doc_embeds, doc_ids = (
                 retriever_outputs['context_input_ids'],
@@ -602,8 +607,18 @@ def main(args):
                         passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset'),
                         index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss'))
                 else:
-                    retriever = RagRetriever.from_pretrained('facebook/rag-sequence-base')
-            model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
+                    if 'custom_index' in checkpoint:  # custom index build from scratch
+                        print(f'load custom index {checkpoint}')
+                        retriever = MyRagRetriever.from_pretrained(
+                            'facebook/rag-sequence-nq', index_name='custom',
+                            passages_path=os.path.join(checkpoint, 'my_knowledge_dataset'),
+                            index_path=os.path.join(checkpoint, 'my_knowledge_dataset_hnsw_index.faiss'))
+                    else:
+                        retriever = MyRagRetriever.from_pretrained('facebook/rag-sequence-base')
+            if 'custom_index' in checkpoint:
+                model = RagSequenceForGeneration.from_pretrained('facebook/rag-sequence-nq', retriever=retriever)
+            else:
+                model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
             model.retriever.index.dataset._format_type = None  # TODO: avoid bus error
             if args.use_mdr:

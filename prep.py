@@ -1912,7 +1912,7 @@ if __name__ == '__main__':
       avg_num_ans = np.mean(cate2hop2numans['comparative'][which_hop] + cate2hop2numans['superlative'][which_hop] + cate2hop2numans['conjunction'][which_hop])
       print(which_hop, avg_num_ans)
 
-    for cate, v in sorted(non_cate_em.items(), key=lambda x: -x[0]):
+    for cate, v in sorted(non_cate_em.items(), key=lambda x: len(x[1])):
       print(f'{cate}\t' + '\t'.join(['{:.2f}'.format(np.mean(vv) * 100) for k, vv in v.items()]))
 
     printstat(non_cate)
