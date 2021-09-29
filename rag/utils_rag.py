@@ -9,6 +9,7 @@ import string
 from collections import Counter
 from logging import getLogger
 from pathlib import Path
+import random
 from typing import Callable, Dict, Iterable, List
 
 import git
@@ -66,6 +67,7 @@ class Seq2SeqDataset(Dataset):
         prefix="",
         only_question_for_input2=False,
         no_question=False,
+        use_mlm=False
     ):
         super().__init__()
         self.src_file = Path(data_dir).joinpath(type_path + ".source")
@@ -84,6 +86,7 @@ class Seq2SeqDataset(Dataset):
         self.doc_sep = ' // '
         self.only_question_for_input2 = only_question_for_input2
         self.no_question = no_question
+        self.use_mlm = use_mlm
 
     def __len__(self):
         return len(self.src_lens)
@@ -123,7 +126,19 @@ class Seq2SeqDataset(Dataset):
                     two_inputs = True
             else:
                 raise NotImplementedError
-        tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")
+
+        source_tokenizer = self.tokenizer.question_encoder if isinstance(self.tokenizer, RagTokenizer) else self.tokenizer
+        target_tokenizer = self.tokenizer.generator if isinstance(self.tokenizer, RagTokenizer) else self.tokenizer
+
+        if self.use_mlm:
+            if len(source_line.strip()) <= 0:
+                return self.__getitem__(random.randint(0, len(self) - 1))
+            tgt_line = source_line
+            source_line = source_tokenizer.tokenize(source_line)
+            source_line = [(t if random.random() >= 0.15 else '[MASK]') for t in source_line]  # TODO: decoder encoder mask is not the same
+            source_line = source_tokenizer.convert_tokens_to_string(source_line)
+        else:
+            tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")
         assert source_line, f"empty source line for index {index}"
         assert tgt_line, f"empty tgt line for index {index}"
 
@@ -135,11 +150,6 @@ class Seq2SeqDataset(Dataset):
                 source_line2 += self.tokenizer.eos_token
 
         # Pad source and target to the right
-        source_tokenizer = (
-            self.tokenizer.question_encoder if isinstance(self.tokenizer, RagTokenizer) else self.tokenizer
-        )
-        target_tokenizer = self.tokenizer.generator if isinstance(self.tokenizer, RagTokenizer) else self.tokenizer
-
         source_inputs = encode_line(source_tokenizer, source_line, self.max_source_length, "right")
         source_inputs_for_decoder = encode_line(target_tokenizer, source_line, self.max_source_length, "right")
         if source_line2:
@@ -158,6 +168,7 @@ class Seq2SeqDataset(Dataset):
             src_mask_for_decoder2 = source_inputs_for_decoder2["attention_mask"].squeeze()
         target_ids = target_inputs["input_ids"].squeeze()
         example = {
+            "input_strings": source_line,
             "input_ids": source_ids,
             "attention_mask": src_mask,
             "input_ids_for_decoder": source_ids_for_decoder,
@@ -179,6 +190,7 @@ class Seq2SeqDataset(Dataset):
         return [len(x) for x in Path(data_file).open().readlines()]
 
     def collate_fn(self, batch) -> Dict[str, torch.Tensor]:
+        input_strings = [x["input_strings"] for x in batch]
         input_ids = torch.stack([x["input_ids"] for x in batch])
         masks = torch.stack([x["attention_mask"] for x in batch])
         input_ids_for_decoder = torch.stack([x["input_ids_for_decoder"] for x in batch])
@@ -207,6 +219,7 @@ class Seq2SeqDataset(Dataset):
             source_ids2, source_mask2 = trim_batch(input_ids2, src_pad_token_id, attention_mask=masks2)
             source_ids_fd2, source_mask_fd2 = trim_batch(input_ids_for_decoder2, tgt_pad_token_id, attention_mask=masks_for_decoder2)
         result = {
+            "input_strings": input_strings,
             "input_ids": source_ids,
             "attention_mask": source_mask,
             "input_ids_for_decoder": source_ids_fd,

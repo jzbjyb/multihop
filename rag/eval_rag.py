@@ -607,18 +607,16 @@ def main(args):
                         passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset'),
                         index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss'))
                 else:
-                    if 'custom_index' in checkpoint:  # custom index build from scratch
-                        print(f'load custom index {checkpoint}')
+                    if type(args.index_path) is str and 'custom_index' in args.index_path:  # custom index build from scratch
+                        print(f'load custom index {args.index_path}')
                         retriever = MyRagRetriever.from_pretrained(
                             'facebook/rag-sequence-nq', index_name='custom',
-                            passages_path=os.path.join(checkpoint, 'my_knowledge_dataset'),
-                            index_path=os.path.join(checkpoint, 'my_knowledge_dataset_hnsw_index.faiss'))
+                            passages_path=os.path.join(args.index_path, 'my_knowledge_dataset'),
+                            index_path=os.path.join(args.index_path, 'my_knowledge_dataset_hnsw_index.faiss'))
                     else:
                         retriever = MyRagRetriever.from_pretrained('facebook/rag-sequence-base')
-            if 'custom_index' in checkpoint:
-                model = RagSequenceForGeneration.from_pretrained('facebook/rag-sequence-nq', retriever=retriever)
-            else:
-                model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
+
+            model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
             model.retriever.init_retrieval()
             model.retriever.index.dataset._format_type = None  # TODO: avoid bus error
             if args.use_mdr:

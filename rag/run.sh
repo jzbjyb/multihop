@@ -8,9 +8,15 @@ server=nanhang
 mode=$1  # e2ec
 hop=$2
 model=$3  # facebook/rag-sequence-nq facebook/rag-sequence-base
-source=$4  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.source  nq/test.source
-target=$5  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.target  nq/test.target
-out=$6  # hotpotqa/dev_select_project.pred
+index_path=$4
+if [[ ${index_path} == 'none' ]]; then
+    index_path=''
+else
+    index_path="--index_path ${index_path}"
+fi
+source=$5  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.source  nq/test.source
+target=$6  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_project_noc.jsonl.target  nq/test.target
+out=$7  # hotpotqa/dev_select_project.pred
 num_beams=1
 batch_size=128
 
@@ -39,7 +45,7 @@ fi
 if [[ ${server} == 'tir' ]]; then
     prefix=""
 elif [[ ${server} == 'nanhang' ]]; then
-    gpu=$7
+    gpu=$8
     prefix="CUDA_VISIBLE_DEVICES=${gpu} proxychains4"
 fi
 
@@ -59,4 +65,4 @@ CUDA_VISIBLE_DEVICES=${gpu} proxychains4 python eval_rag.py \
     --max_source_length ${max_source_length} \
     --eval_batch_size ${batch_size} \
     --print_predictions \
-    --recalculate ${add} &> ${out}.out
+    --recalculate ${add} ${index_path} &> ${out}.out

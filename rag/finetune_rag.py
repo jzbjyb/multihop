@@ -57,7 +57,7 @@ from utils_rag import (  # noqa: E402 # isort:skip
     set_extra_model_params,
     Seq2SeqDataset,
 )
-from rag_model import MyRagSequenceForGeneration
+from rag_model import MyRagSequenceForGeneration, MyRagPyTorchDistributedRetriever
 
 # need the parent dir module
 sys.path.insert(2, str(Path(__file__).resolve().parents[1]))
@@ -167,7 +167,14 @@ class GenerativeQAModule(BaseTransformer):
                     if self.retrieval_mode == 'no':
                         retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-nq', index_name="exact", use_dummy_dataset=True)
                     else:
-                        retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))
+                        if 'custom_index' in config.index_path:
+                            print(f'load custom index {config.index_path}')
+                            retriever = MyRagPyTorchDistributedRetriever.from_pretrained(
+                                'facebook/rag-sequence-nq', index_name='custom',
+                                passages_path=os.path.join(config.index_path, 'my_knowledge_dataset'),
+                                index_path=os.path.join(config.index_path, 'my_knowledge_dataset_hnsw_index.faiss'))
+                        else:
+                            retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))
                         #retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', index_name='exact', use_dummy_dataset=True)
                         #retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
             elif hparams.distributed_retriever == "ray":
@@ -255,6 +262,7 @@ class GenerativeQAModule(BaseTransformer):
             prefix=prefix or "",
             only_question_for_input2=self.multitask != 'no',
             no_question=hparams.no_question,
+            use_mlm=hparams.use_mlm,
         )
         n_observations_per_split = {
             "train": self.hparams.n_train,
@@ -349,13 +357,14 @@ class GenerativeQAModule(BaseTransformer):
             question_encoder_last_hidden_state = question_enc_outputs[0]  # hidden states of question encoder
             if self.fix_retriever:
                 question_encoder_last_hidden_state = question_encoder_last_hidden_state.detach()
-
+            add_kwargs = {'question_strings': batch['input_strings']} if type(model.retriever) is MyRagPyTorchDistributedRetriever else {}
             retriever_outputs = model.retriever(
                 source_ids,
                 question_encoder_last_hidden_state.cpu().detach().to(torch.float32).numpy(),
                 prefix=model.generator.config.prefix,
                 n_docs=n_docs,
                 return_tensors='pt',
+                **add_kwargs,
             )
             context_input_ids, context_attention_mask, retrieved_doc_embeds, retrieved_doc_ids = (
                 retriever_outputs['context_input_ids'],
@@ -624,7 +633,10 @@ class GenerativeQAModule(BaseTransformer):
 
     def _generative_step(self, batch: dict, use_retrieval: bool=True) -> dict:
         start_time = time.time()
+        input_strings = batch['input_strings']
+        del batch['input_strings']
         batch = BatchEncoding(batch).to(device=self.model.device)
+        batch['input_strings'] = input_strings
         if use_retrieval:
             generated_ids = self.model.generate(
                 batch["input_ids"],
@@ -836,6 +848,7 @@ class GenerativeQAModule(BaseTransformer):
         parser.add_argument('--multitask', type=str, default='no')
         parser.add_argument('--distance', type=str, choices=['jsd', 'kl'], default='jsd')
         parser.add_argument('--no_question', action='store_true')
+        parser.add_argument('--use_mlm', action='store_true')
         return parser
 
     @staticmethod
