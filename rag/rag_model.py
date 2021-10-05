@@ -125,6 +125,57 @@ class MyRagPyTorchDistributedRetriever(RagPyTorchDistributedRetriever):
 
 
 class MyRagSequenceForGeneration(RagSequenceForGeneration):
+  def set_additional_retrievers(self, retrievers: List):
+    self._retrievers = retrievers
+
+
+  def retrieve_from_multiple(self, *args, **kwargs):
+    if not hasattr(self, '_retrievers'):
+      return self.retriever(*args, **kwargs)
+
+    all_retrievers = [self.retriever] + self._retrievers
+    question_hidden_states = torch.tensor(args[1])
+    n_docs = kwargs['n_docs']
+
+    cii_li = []
+    cam_li = []
+    rde_li = []
+    di_li = []
+    ds_li = []
+
+    # collect retrieved results from all retrievers
+    for retriever in all_retrievers:
+      retriever_outputs = retriever(*args, **kwargs)
+      cii, cam, rde, di = (
+        retriever_outputs['context_input_ids'],  # (batch_size * n_docs, seq_len)
+        retriever_outputs['context_attention_mask'],  # (batch_size * n_docs, seq_len)
+        retriever_outputs['retrieved_doc_embeds'],  # (batch_size, n_docs, emb_size)
+        retriever_outputs['doc_ids']  # (batch_size, n_docs)
+      )
+      cii_li.append(cii.view(-1, n_docs, cii.size(-1)))
+      cam_li.append(cam.view(-1, n_docs, cam.size(-1)))
+      rde_li.append(rde)
+      di_li.append(di)
+      doc_scores = torch.bmm(question_hidden_states.unsqueeze(1), rde.to(question_hidden_states).transpose(1, 2)).squeeze(1)
+      ds_li.append(doc_scores)
+
+    # merge results
+    cii = torch.cat(cii_li, 1)
+    cam = torch.cat(cam_li, 1)
+    rde = torch.cat(rde_li, 1)
+    di = torch.cat(di_li, 1)
+    doc_scores = torch.cat(ds_li, 1)
+
+    # sort by scores and select
+    doc_scores, topk_ind = torch.topk(doc_scores, n_docs, dim=1)
+    cii = torch.gather(cii, 1, topk_ind.unsqueeze(-1).repeat(1, 1, cii.size(-1))).view(-1, cii.size(-1))
+    cam = torch.gather(cam, 1, topk_ind.unsqueeze(-1).repeat(1, 1, cam.size(-1))).view(-1, cam.size(-1))
+    rde = torch.gather(rde, 1, topk_ind.unsqueeze(-1).repeat(1, 1, rde.size(-1)))
+    di = torch.gather(di, 1, topk_ind)
+
+    return {'context_input_ids': cii, 'context_attention_mask': cam, 'retrieved_doc_embeds': rde, 'doc_ids': di}
+
+
   @torch.no_grad()
   def generate(
     self,

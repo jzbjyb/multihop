@@ -19,6 +19,7 @@ target=$6  # ../../Break/break_dataset/QDMR-high-level/hotpotqa/dev_select_proje
 out=$7  # hotpotqa/dev_select_project.pred
 num_beams=1
 batch_size=128
+gmethod=generator
 
 add=''
 if [[ ${mode} == 'e2e' ]]; then
@@ -65,4 +66,5 @@ CUDA_VISIBLE_DEVICES=${gpu} proxychains4 python eval_rag.py \
     --max_source_length ${max_source_length} \
     --eval_batch_size ${batch_size} \
     --print_predictions \
+    --generation_method ${gmethod} \
     --recalculate ${add} ${index_path} &> ${out}.out

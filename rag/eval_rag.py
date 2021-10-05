@@ -11,6 +11,7 @@ import sys
 import pandas as pd
 import torch
 import torch.nn.functional as F
+import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
 from operator import itemgetter
@@ -23,6 +24,7 @@ sys.path.append(os.path.join(os.getcwd()))  # noqa: E402 # isort:skip
 from utils_rag import exact_match_score, f1_score, truncate_context_with_question  # noqa: E402 # isort:skip
 from rag_model import MyRagSequenceForGeneration, MyRagRetriever
 from finetune_rag import GenerativeQAModule, root_to_mdr
+from transformers_utils import predict_batch, decode_keep_mask
 from dataset import Break, PseudoBreak
 
 
@@ -176,7 +178,7 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
         for nh in range(args.retrieval_hop):
             question_hidden_states = rag_model.question_encoder(input_ids, attention_mask=attention_mask)[0]
             add_kwargs = {'question_strings': questions} if type(rag_model.retriever) is MyRagRetriever else {}
-            retriever_outputs = rag_model.retriever(
+            retriever_outputs = rag_model.retrieve_from_multiple(
                 input_ids,
                 question_hidden_states.cpu().detach().to(torch.float32).numpy(),
                 prefix=rag_model.generator.config.prefix,
@@ -239,34 +241,47 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
         for index in range(batch_size):
             # first, generate beams from documents:
             generator_input_ids = context_input_ids[index * n_docs : (index + 1) * n_docs]  # (n_docs, max_len)
-            output_sequences = rag_model.generator.generate(
-                generator_input_ids,
-                attention_mask=None,
-                num_beams=num_beams,
-                num_return_sequences=num_doc_return_sequences,
-                min_length=args.min_length,
-                max_length=args.max_length,
-            )  # n_docs * n_beam, tgt_len
-            if do_deduplication:
-                # do_deduplication, max_output_len
-                output_sequences = torch.stack(list({str(k.tolist()): k for k in output_sequences}.values()))
-            num_candidates = output_sequences.shape[0]  # after deduplication, this number can be less than n_docs*n_beam
-            individual_input_ids = generator_input_ids.repeat(num_candidates, 1)
-            individual_attention_mask = context_attention_mask[index * n_docs : (index + 1) * n_docs]
-            individual_attention_mask = individual_attention_mask.repeat(num_candidates, 1)
-            individual_doc_scores = prev_doc_scores[index : (index + 1), :]  # doc_scores.shape = [batch, n_docs]
-            individual_doc_scores = individual_doc_scores.repeat(num_candidates, 1)  # [num_candidates, n_docs]
-            outputs = rag_model(
-                context_input_ids=individual_input_ids,
-                context_attention_mask=individual_attention_mask,
-                doc_scores=individual_doc_scores,
-                labels=output_sequences,
-                exclude_bos_score=True,
-            )
-            lps, top_cand_inds = (-outputs['loss']).topk(num_doc_return_sequences)
-            # add hypothesis
-            hypos.append(output_sequences[top_cand_inds])
-            logprobs.append(lps)
+            if args.generation_method == 'generator':
+                output_sequences = rag_model.generator.generate(
+                    generator_input_ids,
+                    attention_mask=None,
+                    num_beams=num_beams,
+                    num_return_sequences=num_doc_return_sequences,
+                    min_length=args.min_length,
+                    max_length=args.max_length,
+                )  # n_docs * n_beam, tgt_len
+                if do_deduplication:
+                    # do_deduplication, max_output_len
+                    output_sequences = torch.stack(list({str(k.tolist()): k for k in output_sequences}.values()))
+                num_candidates = output_sequences.shape[0]  # after deduplication, this number can be less than n_docs*n_beam
+                individual_input_ids = generator_input_ids.repeat(num_candidates, 1)
+                individual_attention_mask = context_attention_mask[index * n_docs : (index + 1) * n_docs]
+                individual_attention_mask = individual_attention_mask.repeat(num_candidates, 1)
+                individual_doc_scores = prev_doc_scores[index : (index + 1), :]  # doc_scores.shape = [batch, n_docs]
+                individual_doc_scores = individual_doc_scores.repeat(num_candidates, 1)  # [num_candidates, n_docs]
+                outputs = rag_model(
+                    context_input_ids=individual_input_ids,
+                    context_attention_mask=individual_attention_mask,
+                    doc_scores=individual_doc_scores,
+                    labels=output_sequences,
+                    exclude_bos_score=True,
+                )
+                lps, top_cand_inds = (-outputs['loss']).topk(num_doc_return_sequences)
+                # add hypothesis
+                hypos.append(output_sequences[top_cand_inds])
+                logprobs.append(lps)
+            elif args.generation_method == 'mask':
+                tokenizer = rag_model.retriever.generator_tokenizer
+                context_with_question: List[str] = []
+                for gii in generator_input_ids:
+                    context_with_question.append(decode_keep_mask(gii.tolist(), tokenizer))
+                preds, lps = predict_batch(
+                    rag_model.generator, tokenizer, context_with_question, [''] * len(questions),
+                    mask_num_hint=False, max_num_mask=5, init_mask_token='<mask>')
+                best = np.argmax(lps)
+                # TODO: add support for num_doc_return_sequences
+                hypos.append(tokenizer([preds[best]], return_tensors='pt')['input_ids'])
+                logprobs.append(torch.tensor([lps[best]]))
         outputs = rag_model._cat_and_pad(hypos, pad_token_id=rag_model.config.generator.pad_token_id)
         logprobs = torch.cat(logprobs, 0)
         answers = rag_model.retriever.generator_tokenizer.batch_decode(outputs, skip_special_tokens=True)
@@ -382,6 +397,7 @@ def get_args():
         default=None,
         type=str,
         help="Path to the retrieval index",
+        nargs='*'
     )
     parser.add_argument("--n_docs", default=1, type=int, help="Number of retrieved docs")
     parser.add_argument(
@@ -397,6 +413,12 @@ def get_args():
         default="e2e",
         type=str,
         help="Evaluation mode, e2e calculates exact match and F1 of the downstream task, retrieval calculates precision@k.",
+    )
+    parser.add_argument(
+        "--generation_method",
+        choices=["generator", "mask"],
+        default="generator",
+        type=str,
     )
     parser.add_argument(
         '--retrieval_hop',
@@ -556,7 +578,7 @@ def main(args):
         if args.index_name is not None:
             model_kwargs["index_name"] = args.index_name
         if args.index_path is not None:
-            model_kwargs["index_path"] = args.index_path
+            model_kwargs["index_path"] = args.index_path[0]
     else:
         model_class = BartForConditionalGeneration
 
@@ -607,16 +629,25 @@ def main(args):
                         passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset'),
                         index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss'))
                 else:
-                    if type(args.index_path) is str and 'custom_index' in args.index_path:  # custom index build from scratch
-                        print(f'load custom index {args.index_path}')
-                        retriever = MyRagRetriever.from_pretrained(
-                            'facebook/rag-sequence-nq', index_name='custom',
-                            passages_path=os.path.join(args.index_path, 'my_knowledge_dataset'),
-                            index_path=os.path.join(args.index_path, 'my_knowledge_dataset_hnsw_index.faiss'))
+                    if args.index_path is not None:
+                        retrievers = []
+                        for ip in args.index_path:  # load multiple retrievers if any
+                            if 'custom_index' in ip:  # custom index build from scratch
+                                print(f'load custom index {ip}')
+                                retriever = MyRagRetriever.from_pretrained(
+                                    'facebook/rag-sequence-nq', index_name='custom',
+                                    passages_path=os.path.join(ip, 'my_knowledge_dataset'),
+                                    index_path=os.path.join(ip, 'my_knowledge_dataset_hnsw_index.faiss'))
+                            else:
+                                retriever = MyRagRetriever.from_pretrained('facebook/rag-sequence-base')
+                            retrievers.append(retriever)
+                        retriever = retrievers[0]
                     else:
                         retriever = MyRagRetriever.from_pretrained('facebook/rag-sequence-base')
 
             model = model_class.from_pretrained(checkpoint, retriever=retriever, **model_kwargs)
+            if args.index_path is not None and len(retrievers) > 1:
+                model.set_additional_retrievers(retrievers[1:])
             model.retriever.init_retrieval()
             model.retriever.index.dataset._format_type = None  # TODO: avoid bus error
             if args.use_mdr:
