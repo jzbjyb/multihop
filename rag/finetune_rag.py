@@ -174,7 +174,8 @@ class GenerativeQAModule(BaseTransformer):
                                 passages_path=os.path.join(config.index_path, 'my_knowledge_dataset'),
                                 index_path=os.path.join(config.index_path, 'my_knowledge_dataset_hnsw_index.faiss'))
                         else:
-                            retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))
+                            retriever = MyRagPyTorchDistributedRetriever.from_pretrained(
+                                'facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))
                         #retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-base', index_name='exact', use_dummy_dataset=True)
                         #retriever = RagPyTorchDistributedRetriever.from_pretrained(hparams.model_name_or_path, config=config)
             elif hparams.distributed_retriever == "ray":
@@ -184,6 +185,8 @@ class GenerativeQAModule(BaseTransformer):
                 )
             retriever.config.max_combined_length = hparams.max_combined_length  # need to be smaller for multihop training
             model = self.model_class.from_pretrained(hparams.model_name_or_path, config=config, retriever=retriever)
+            if hparams.freeze == 'question_encoder':  # freeze sub-module
+                model.rag.question_encoder.requires_grad_(False)
             if hparams.model_name_or_path2:
                 print('---> load model2 {}'.format(hparams.model_name_or_path2))
                 model2 = self.model_class.from_pretrained(hparams.model_name_or_path2, config=config, retriever=retriever)
@@ -778,6 +781,7 @@ class GenerativeQAModule(BaseTransformer):
             type=str,
             help="RAG model type: sequence or token, if none specified, the type is inferred from the model_name_or_path",
         )
+        parser.add_argument('--freeze', type=str, choices=[None, 'none', 'question_encoder'], default=None)
         return parser
 
     @staticmethod

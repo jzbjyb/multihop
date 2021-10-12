@@ -1,6 +1,6 @@
 """ Evaluation script for RAG models."""
 
-from typing import List, Callable
+from typing import List, Callable, Dict
 
 import argparse
 import ast
@@ -192,6 +192,7 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
                 retriever_outputs['retrieved_doc_embeds'],
                 retriever_outputs['doc_ids']
             )
+            all_docs = rag_model.retriever.index.get_doc_dicts(doc_ids)
             doc_ids = doc_ids.to(input_ids)
             retrieved_doc_embeds = retrieved_doc_embeds.to(question_hidden_states)
             context_input_ids = context_input_ids.to(input_ids)
@@ -288,7 +289,7 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
         if args.print_predictions:
             for q, a in zip(questions, answers):
                 logger.info("Q: {} - A: {}".format(q, a))
-        return answers, logprobs.cpu().numpy(), retrieved_docs, retrieved_doc_ids
+        return answers, logprobs.cpu().numpy(), retrieved_docs, retrieved_doc_ids, all_docs
 
 
 def evaluate_batch_e2e(args, rag_model, questions):
@@ -514,14 +515,21 @@ def get_args():
 def write_html(questions: List[str], answers: List[str], golds: List[str],
                logprobs: List[float], ret_docs: List[List[List[str]]], ret_doc_ids: List[List[List[int]]], vis_file):
     for i, (ques, ans, gold, lp) in enumerate(zip(questions, answers, golds, logprobs)):
-        vis_file.write('<div><span>{}</span></div>'.format(ques))
-        vis_file.write('<div><span>Prediction: {}</span> <span>{:.5f}</span></div>'.format(ans, lp))
-        vis_file.write('<div><span>Gold: {}</span></div>'.format(gold))
+        vis_file.write('<div><span>{}</span></div>\n'.format(ques))
+        vis_file.write('<div><span>Prediction: {}</span> <span>{:.5f}</span></div>\n'.format(ans, lp))
+        vis_file.write('<div><span>Gold: {}</span></div>\n'.format(gold))
         for nh, hop in enumerate(ret_docs):
-            vis_file.write('<div>--- HOP {} ---</div>'.format(nh + 1))
+            vis_file.write('<div>--- HOP {} ---</div>\n'.format(nh + 1))
             for nd, doc in enumerate(hop[i]):
-                vis_file.write('<div> * <b>{}</b> {}</div>'.format('-'.join(map(str, ret_doc_ids[nh][i][nd])), doc))
-        vis_file.write('<hr>')
+                vis_file.write('<div> * <b>{}</b> {}</div>\n'.format('-'.join(map(str, ret_doc_ids[nh][i][nd])), doc))
+        vis_file.write('<hr>\n')
+
+
+def write_retrieval(doc_ids: List[List[int]], all_docs: List[Dict[str, List]], ret_file):
+    for i, docs in enumerate(all_docs):
+        combine = '\t'.join(map(lambda x: '{} || {} || {}'.format('-'.join(map(str, x[0])), x[1], x[2]),
+                                zip(doc_ids[i], docs['title'], docs['text'])))
+        ret_file.write(combine + '\n')
 
 
 class Args(object):
@@ -690,7 +698,7 @@ def main(args):
                 for b in range(0, len(inds), batch_size):
                     ids = inds[b:b + batch_size]
                     qs = questions[b:b + batch_size]
-                    answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, qs)
+                    answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, qs)[:4]
                     for id, a in zip(ids, answers):
                         id2a[id] = a
                 break_dataset.instantiate_hop_n(id2a, nh, split=split)
@@ -699,27 +707,29 @@ def main(args):
             with open(args.evaluation_set, "r") as eval_file, \
               open(args.gold_data_path, 'r') as gold_file, \
               open(args.predictions_path, "w") as preds_file, \
-              open(args.predictions_path + '.html', 'w') as vis_file:
+              open(args.predictions_path + '.html', 'w') as vis_file, \
+              open(args.predictions_path + '.ret', 'w') as ret_file:
                 questions = []
                 golds = []
                 for line in tqdm(eval_file):
                     questions.append(line.strip())
                     golds.append(gold_file.readline().rstrip('\n'))
                     if len(questions) == args.eval_batch_size:
-                        answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
+                        answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions)
                         preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                         preds_file.flush()
                         if args.eval_mode == 'e2e':
                             write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
+                            write_retrieval(ret_doc_ids[0], all_docs, ret_file)  # TODO: only work for hop1
                         questions = []
                         golds = []
                 if len(questions) > 0:
-                    answers, logprobs, ret_docs, ret_doc_ids = evaluate_batch_fn(args, model, questions)
+                    answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions)
                     preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                     preds_file.flush()
                     if args.eval_mode == 'e2e':
                         write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
-
+                        write_retrieval(ret_doc_ids[0], all_docs, ret_file)  # TODO: only work for hop1
                 score_fn(args, args.predictions_path, args.gold_data_path)
 
 
