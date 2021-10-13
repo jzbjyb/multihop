@@ -99,7 +99,7 @@ def get_precision_at_k(args, preds_path, gold_data_path):
     logger.info(f"Precision@{k}: {em: .2f}")
 
 
-def evaluate_batch_retrieval(args, rag_model, questions):
+def evaluate_batch_retrieval(args, rag_model, questions, **kwargs):
     def strip_title(title):
         if title.startswith('"'):
             title = title[1:]
@@ -133,7 +133,7 @@ def evaluate_batch_retrieval(args, rag_model, questions):
     return provenance_strings
 
 
-def evaluate_batch_retrieval_all(args, rag_model, questions):
+def evaluate_batch_retrieval_all(args, rag_model, questions, **kwargs):
     n_docs = args.n_docs
     with torch.no_grad():
         inputs_dict = rag_model.retriever.question_encoder_tokenizer.batch_encode_plus(
@@ -155,9 +155,10 @@ def evaluate_batch_retrieval_all(args, rag_model, questions):
         return all_docs, scores, None, None
 
 
-def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
+def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions, **kwargs):
     if type(rag_model.retriever) is MyRagRetriever and args.retrieval_hop > 1:
         raise Exception('MyRagRetriever is only used for single-hop retrieval')
+    use_eval_target = 'eval_target' in kwargs and bool(kwargs['eval_target'])
 
     n_docs = rag_model.config.n_docs
     do_deduplication = rag_model.config.do_deduplication
@@ -243,17 +244,28 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
             # first, generate beams from documents:
             generator_input_ids = context_input_ids[index * n_docs : (index + 1) * n_docs]  # (n_docs, max_len)
             if args.generation_method == 'generator':
-                output_sequences = rag_model.generator.generate(
-                    generator_input_ids,
-                    attention_mask=None,
-                    num_beams=num_beams,
-                    num_return_sequences=num_doc_return_sequences,
-                    min_length=args.min_length,
-                    max_length=args.max_length,
-                )  # n_docs * n_beam, tgt_len
-                if do_deduplication:
-                    # do_deduplication, max_output_len
-                    output_sequences = torch.stack(list({str(k.tolist()): k for k in output_sequences}.values()))
+                if use_eval_target:
+                    tokenizer = rag_model.retriever.generator_tokenizer
+                    output_sequences: List[str] = kwargs['eval_target'][index]
+                    num_doc_return_sequences = len(output_sequences)
+                    output_sequences = tokenizer.batch_encode_plus(
+                        output_sequences,
+                        max_length=rag_model.config.max_combined_length,
+                        return_tensors='pt',
+                        padding='max_length',
+                        truncation=True)['input_ids'].to(generator_input_ids.device)
+                else:
+                    output_sequences = rag_model.generator.generate(
+                        generator_input_ids,
+                        attention_mask=None,
+                        num_beams=num_beams,
+                        num_return_sequences=num_doc_return_sequences,
+                        min_length=args.min_length,
+                        max_length=args.max_length,
+                    )  # n_docs * n_beam, tgt_len
+                    if do_deduplication:
+                        # do_deduplication, max_output_len
+                        output_sequences = torch.stack(list({str(k.tolist()): k for k in output_sequences}.values()))
                 num_candidates = output_sequences.shape[0]  # after deduplication, this number can be less than n_docs*n_beam
                 individual_input_ids = generator_input_ids.repeat(num_candidates, 1)
                 individual_attention_mask = context_attention_mask[index * n_docs : (index + 1) * n_docs]
@@ -267,10 +279,16 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
                     labels=output_sequences,
                     exclude_bos_score=True,
                 )
-                lps, top_cand_inds = (-outputs['loss']).topk(num_doc_return_sequences)
-                # add hypothesis
-                hypos.append(output_sequences[top_cand_inds])
-                logprobs.append(lps)
+                if use_eval_target:  # don't sort
+                    lps = -outputs['loss']
+                    # add hypothesis
+                    hypos.append(output_sequences)
+                    logprobs.append(lps)
+                else:
+                    lps, top_cand_inds = (-outputs['loss']).topk(num_doc_return_sequences)
+                    # add hypothesis
+                    hypos.append(output_sequences[top_cand_inds])
+                    logprobs.append(lps)
             elif args.generation_method == 'mask':
                 tokenizer = rag_model.retriever.generator_tokenizer
                 context_with_question: List[str] = []
@@ -292,7 +310,7 @@ def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions):
         return answers, logprobs.cpu().numpy(), retrieved_docs, retrieved_doc_ids, all_docs
 
 
-def evaluate_batch_e2e(args, rag_model, questions):
+def evaluate_batch_e2e(args, rag_model, questions, **kwargs):
     with torch.no_grad():
         inputs_dict = rag_model.retriever.question_encoder_tokenizer.batch_encode_plus(
             questions, return_tensors="pt", padding=True, truncation=True, max_length=args.max_source_length
@@ -319,7 +337,7 @@ def evaluate_batch_e2e(args, rag_model, questions):
         return answers, logprobs.cpu().numpy(), None, None
 
 
-def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str]):
+def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str], **kwargs):
     qtds = [q.split('\t') for q in questions]
     def format_qtd(qtd):
         score = 0.0
@@ -410,7 +428,7 @@ def get_args():
     )
     parser.add_argument(
         "--eval_mode",
-        choices=["e2e", "retrieval", "e2ec", "e2ec_nq", "break", "pseudo_break", "retrieval_all"],
+        choices=["e2e", "retrieval", "e2ec", "e2ec_nq", "break", "pseudo_break", "retrieval_all", "e2e_multichoice"],
         default="e2e",
         type=str,
         help="Evaluation mode, e2e calculates exact match and F1 of the downstream task, retrieval calculates precision@k.",
@@ -598,7 +616,7 @@ def main(args):
 
     logger.info("Evaluate the following checkpoints: %s", checkpoints)
 
-    if args.eval_mode == "e2e":
+    if args.eval_mode in {"e2e", "e2e_multichoice"}:
         evaluate_batch_fn = evaluate_batch_e2e_multihop_retrieval
         score_fn = get_scores
     elif args.eval_mode in {'e2ec', 'e2ec_nq'}:
@@ -711,23 +729,31 @@ def main(args):
               open(args.predictions_path + '.ret', 'w') as ret_file:
                 questions = []
                 golds = []
+                alias_li: List[List[str]] = []
                 for line in tqdm(eval_file):
-                    questions.append(line.strip())
-                    golds.append(gold_file.readline().rstrip('\n'))
-                    if len(questions) == args.eval_batch_size:
-                        answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions)
+                    if args.eval_mode == 'e2e_multichoice':
+                        alias = gold_file.readline().rstrip('\n').split('\t')
+                        questions.append(line.strip())
+                        golds.append(alias[0])  # assume the first one is gold
+                        alias_li.append(alias)
+                    else:
+                        questions.append(line.strip())
+                        golds.append(gold_file.readline().rstrip('\n'))
+                    if len(questions) >= args.eval_batch_size:
+                        answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions, eval_target=alias_li)
                         preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                         preds_file.flush()
-                        if args.eval_mode == 'e2e':
+                        if args.eval_mode in {'e2e', 'e2e_multichoice'}:
                             write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
                             write_retrieval(ret_doc_ids[0], all_docs, ret_file)  # TODO: only work for hop1
                         questions = []
                         golds = []
+                        alias_li = []
                 if len(questions) > 0:
-                    answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions)
+                    answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions, eval_target=alias_li)
                     preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                     preds_file.flush()
-                    if args.eval_mode == 'e2e':
+                    if args.eval_mode in {'e2e', 'e2e_multichoice'}:
                         write_html(questions, answers, golds, logprobs, ret_docs, ret_doc_ids, vis_file)
                         write_retrieval(ret_doc_ids[0], all_docs, ret_file)  # TODO: only work for hop1
                 score_fn(args, args.predictions_path, args.gold_data_path)

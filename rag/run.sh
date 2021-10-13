@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH --mem=100000
+#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=40
 #SBATCH --time=0
-#SBATCH --gres=gpu:1
+#SBATCH --output=slurm_out/slurm-%j.out
 
-server=nanhang
+server=tir
 
 mode=$1  # e2ec
 hop=$2
@@ -23,6 +25,9 @@ gmethod=generator
 
 add=''
 if [[ ${mode} == 'e2e' ]]; then
+    ndocs=5
+    max_source_length=128
+elif [[ ${mode} == 'e2e_multichoice' ]]; then
     ndocs=5
     max_source_length=128
 elif [[ ${mode} == 'break' ]]; then
@@ -47,11 +52,10 @@ if [[ ${server} == 'tir' ]]; then
     prefix=""
 elif [[ ${server} == 'nanhang' ]]; then
     gpu=$8
-    prefix="CUDA_VISIBLE_DEVICES=${gpu} proxychains4"
+    export CUDA_VISIBLE_DEVICES=${gpu}
 fi
 
-#CUDA_VISIBLE_DEVICES=${gpu} proxychains4
-CUDA_VISIBLE_DEVICES=${gpu} proxychains4 python eval_rag.py \
+python eval_rag.py \
     --model_name_or_path ${model} \
     --model_type rag_sequence \
     --evaluation_set ${source} \

@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH --mem=100000
 #SBATCH --time=0
-#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=40
+#SBATCH --output=slurm_out/slurm-%j.out
 
 # Add parent directory to python path to access lightning_base.py
 export PYTHONPATH="../":"${PYTHONPATH}"
-
-# A sample finetuning run, you need to specify data_dir, output_dir and model_name_or_path
-# run ./examples/rag/finetune_rag.sh --help to see all the possible options
 
 DATA_DIR=$1  # /home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa/full_qa_small
 MODEL_NAME_OR_PATH=facebook/rag-sequence-nq # facebook/rag-sequence-nq
@@ -30,9 +28,8 @@ batch_size=4  # $(( 1*${ngpus} ))
 epochs=3
 freeze=none
 
-#CUDA_VISIBLE_DEVICES=${gpus} proxychains4
 #HF_HOME=$HOME/tir4/hf_home_cache
-CUDA_VISIBLE_DEVICES=${gpus} proxychains4 python finetune_rag.py \
+CUDA_VISIBLE_DEVICES=${gpus} python finetune_rag.py \
     --data_dir $DATA_DIR \
     --output_dir $OUTPUT_DIR \
     --model_name_or_path $MODEL_NAME_OR_PATH \
