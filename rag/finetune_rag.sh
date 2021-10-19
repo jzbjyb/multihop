@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH --mem=100000
+#SBATCH --gres=gpu:v100:1
+#SBATCH --cpus-per-task=16
 #SBATCH --time=0
-#SBATCH --cpus-per-task=40
-#SBATCH --output=slurm_out/slurm-%j.out
+#SBATCH --output=slurm_out/%j.out
 
 # Add parent directory to python path to access lightning_base.py
 export PYTHONPATH="../":"${PYTHONPATH}"
@@ -27,6 +28,7 @@ port=$6
 batch_size=4  # $(( 1*${ngpus} ))
 epochs=3
 freeze=none
+in_batch_neg=none
 
 #HF_HOME=$HOME/tir4/hf_home_cache
 CUDA_VISIBLE_DEVICES=${gpus} python finetune_rag.py \
@@ -65,4 +67,5 @@ CUDA_VISIBLE_DEVICES=${gpus} python finetune_rag.py \
     --consistency_loss ${consistency_loss} \
     --distance ${distance} \
     --multitask ${multitask} \
-    --freeze ${freeze}
+    --freeze ${freeze} \
+    --in_batch_neg ${in_batch_neg}

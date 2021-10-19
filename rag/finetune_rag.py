@@ -118,7 +118,7 @@ class GenerativeQAModule(BaseTransformer):
         if isinstance(hparams, dict):
             hparams = AttrDict(hparams)
         if hparams.model_type == "rag_sequence":
-            self.model_class = RagSequenceForGeneration
+            self.model_class = MyRagSequenceForGeneration
         elif hparams.model_type == "rag_token":
             self.model_class = RagTokenForGeneration
         elif hparams.model_type == "bart":
@@ -134,6 +134,7 @@ class GenerativeQAModule(BaseTransformer):
         self.consistency_loss = hparams.consistency_loss
         self.distance = hparams.distance
         self.multitask = hparams.multitask
+        self.in_batch_neg = hparams.in_batch_neg
         if self.multitask != 'no' and hparams.model_name_or_path2 is not None:
             raise Exception('multitask only uses one model')
 
@@ -376,10 +377,23 @@ class GenerativeQAModule(BaseTransformer):
                 retriever_outputs['doc_ids'],
             )
 
+            # (bs, n_docs, emb_size)
             retrieved_doc_embeds = retrieved_doc_embeds.to(question_encoder_last_hidden_state)
             context_input_ids = context_input_ids.to(source_ids)
             context_attention_mask = context_attention_mask.to(source_ids)
-            doc_scores = torch.bmm(question_encoder_last_hidden_state.unsqueeze(1), retrieved_doc_embeds.transpose(1, 2)).squeeze(1)
+            if self.in_batch_neg is None:  # compute doc scores only on docs retrieved for the current question
+                # (bs, n_docs)
+                doc_scores = torch.bmm(
+                    question_encoder_last_hidden_state.unsqueeze(1),
+                    retrieved_doc_embeds.transpose(1, 2)).squeeze(1)
+            elif self.in_batch_neg == 'zero':  # compute doc scores on all docs in this batch
+                bs, n_docs, emb_size = retrieved_doc_embeds.size()
+                # (bs, bs * n_docs)
+                doc_scores = torch.matmul(
+                    question_encoder_last_hidden_state,
+                    retrieved_doc_embeds.permute(2, 0, 1).view(emb_size, -1))
+            else:
+                raise NotImplementedError
 
             if prev_doc_scores is None:
                 prev_doc_scores = doc_scores
@@ -648,7 +662,7 @@ class GenerativeQAModule(BaseTransformer):
                 use_cache=True,
                 min_length=1,
                 max_length=self.target_lens["val"],
-            )
+            )[0]
         else:
             generated_ids = self.model.generate(
                 context_input_ids=batch["input_ids_for_decoder"],
@@ -658,7 +672,7 @@ class GenerativeQAModule(BaseTransformer):
                 use_cache=True,
                 min_length=1,
                 max_length=self.target_lens["val"],
-            )
+            )[0]
 
         gen_time = (time.time() - start_time) / batch["input_ids"].shape[0]
         preds: List[str] = self.ids_to_clean_text(generated_ids)
@@ -853,6 +867,8 @@ class GenerativeQAModule(BaseTransformer):
         parser.add_argument('--distance', type=str, choices=['jsd', 'kl'], default='jsd')
         parser.add_argument('--no_question', action='store_true')
         parser.add_argument('--use_mlm', action='store_true')
+        parser.add_argument('--in_batch_neg', type=str, default='none', choices=['none', 'zero'],
+                            help='specifies how to use retrieved docs for other questions as in-batch negatives')
         return parser
 
     @staticmethod

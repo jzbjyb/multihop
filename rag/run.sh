@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH --mem=100000
 #SBATCH --gres=gpu:v100:1
-#SBATCH --cpus-per-task=40
+#SBATCH --cpus-per-task=16
 #SBATCH --time=0
-#SBATCH --output=slurm_out/slurm-%j.out
+#SBATCH --output=slurm_out/%j.out
 
 server=tir
 
