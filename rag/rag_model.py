@@ -124,6 +124,54 @@ class MyRagPyTorchDistributedRetriever(RagPyTorchDistributedRetriever):
     )
 
 
+class MemoryBank(nn.Module):
+  def __init__(self, bank_size: int, emb_size: int = None):
+    super().__init__()
+    self.bank_size = bank_size
+    self.emb_size = emb_size
+    if emb_size is not None:
+      self.register_buffer('queue', torch.randn(bank_size, emb_size))
+    self.register_buffer('ptr', torch.zeros(1, dtype=torch.long))
+    self.register_buffer('is_full', torch.zeros(1, dtype=bool))
+
+
+  @property
+  def is_initialized(self):
+    return hasattr(self, 'queue')
+
+
+  @torch.no_grad()
+  def put(self,
+          embeddings: torch.FloatTensor):  # (bs, emb_size)
+    bs, es = embeddings.size()
+    ptr = int(self.ptr)
+
+    if not self.is_initialized:
+      self.emb_size = es
+      self.register_buffer('queue', torch.randn(self.bank_size, self.emb_size).to(embeddings.device))
+
+    # update queue
+    if ptr + bs > self.bank_size:  # reach the end of the queue
+      self.queue[ptr:, :] = embeddings[:self.bank_size - ptr]
+      self.queue[:ptr + bs - self.bank_size, :] = embeddings[self.bank_size - ptr:]
+      self.is_full = self.is_full | True
+    else:
+      self.queue[ptr:ptr + bs, :] = embeddings
+
+    # move pointer
+    self.ptr[0] = (ptr + bs) % self.bank_size
+    return
+
+
+  @torch.no_grad()
+  def get(self):
+    if not self.is_initialized:
+      raise ValueError('queue not initialized')
+    if not self.is_full:
+      return self.queue[:self.ptr]  # (<bank_size, emb_size)
+    return self.queue
+
+
 class MyRagSequenceForGeneration(RagSequenceForGeneration):
   def set_additional_retrievers(self, retrievers: List):
     self._retrievers = retrievers
@@ -357,15 +405,15 @@ class MyRagSequenceForGeneration(RagSequenceForGeneration):
       seq_logits.shape[0] // n_docs, n_docs, -1, seq_logits.size(-1)
     )  # batch_size x n_docs x tgt_len x #vocab_size
 
-    # (bs, n_docs) or (bs, bs * n_docs)
+    # (bs, n_docs) or (bs, bs * n_docs) or (bs, bs * n_docs + memory_bank_size)
     doc_logprobs = torch.nn.functional.log_softmax(doc_scores, dim=1)
 
     bs = doc_logprobs.size(0)
     if doc_logprobs.size(1) == n_docs:
       pass
-    elif doc_logprobs.size(1) == bs * n_docs:  # contain doc log probs over the whole batch
+    elif doc_logprobs.size(1) >= bs * n_docs:  # contain doc log probs over the whole batch (plus memory bank)
       # (bs, bs, n_docs)
-      doc_logprobs = doc_logprobs.view(bs, bs, n_docs)
+      doc_logprobs = doc_logprobs[:, :bs * n_docs].view(bs, bs, n_docs)  # remove memory bank
       # (bs, n_docs)
       doc_logprobs = torch.masked_select(
         doc_logprobs,

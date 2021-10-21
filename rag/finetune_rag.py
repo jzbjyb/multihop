@@ -57,7 +57,7 @@ from utils_rag import (  # noqa: E402 # isort:skip
     set_extra_model_params,
     Seq2SeqDataset,
 )
-from rag_model import MyRagSequenceForGeneration, MyRagPyTorchDistributedRetriever
+from rag_model import MyRagSequenceForGeneration, MyRagPyTorchDistributedRetriever, MemoryBank
 
 # need the parent dir module
 sys.path.insert(2, str(Path(__file__).resolve().parents[1]))
@@ -134,7 +134,7 @@ class GenerativeQAModule(BaseTransformer):
         self.consistency_loss = hparams.consistency_loss
         self.distance = hparams.distance
         self.multitask = hparams.multitask
-        self.in_batch_neg = hparams.in_batch_neg
+        self.negative_method = hparams.negative_method
         if self.multitask != 'no' and hparams.model_name_or_path2 is not None:
             raise Exception('multitask only uses one model')
 
@@ -223,6 +223,8 @@ class GenerativeQAModule(BaseTransformer):
             )
 
         super().__init__(hparams, config=config, tokenizer=tokenizer, model=model)
+        if self.negative_method == 'memory_bank':
+            self.memory_bank = MemoryBank(bank_size=hparams.memory_bank_size)
         self.model2 = model2
         if self.multitask == 'no':
             pass
@@ -381,17 +383,28 @@ class GenerativeQAModule(BaseTransformer):
             retrieved_doc_embeds = retrieved_doc_embeds.to(question_encoder_last_hidden_state)
             context_input_ids = context_input_ids.to(source_ids)
             context_attention_mask = context_attention_mask.to(source_ids)
-            if self.in_batch_neg is None:  # compute doc scores only on docs retrieved for the current question
+            if self.negative_method == 'none':  # compute doc scores only on docs retrieved for the current question
                 # (bs, n_docs)
                 doc_scores = torch.bmm(
                     question_encoder_last_hidden_state.unsqueeze(1),
                     retrieved_doc_embeds.transpose(1, 2)).squeeze(1)
-            elif self.in_batch_neg == 'zero':  # compute doc scores on all docs in this batch
+            elif self.negative_method == 'in_batch':  # compute doc scores on all docs in this batch
                 bs, n_docs, emb_size = retrieved_doc_embeds.size()
                 # (bs, bs * n_docs)
                 doc_scores = torch.matmul(
                     question_encoder_last_hidden_state,
                     retrieved_doc_embeds.permute(2, 0, 1).view(emb_size, -1))
+            elif self.negative_method == 'memory_bank':  # compute doc scores across batches
+                bs, n_docs, emb_size = retrieved_doc_embeds.size()
+                # (bs * n_docs, emb_size)
+                retrieved_doc_embeds = retrieved_doc_embeds.view(-1, emb_size)
+                # (bs * n_docs (+ bank_size), emb_size)
+                merged_doc_embeds = torch.cat([retrieved_doc_embeds, self.memory_bank.get()], 0) \
+                    if self.memory_bank.is_initialized else retrieved_doc_embeds
+                # (bs, bs * n_docs (+ bank_size optionally))
+                doc_scores = torch.matmul(question_encoder_last_hidden_state, merged_doc_embeds.T)
+                # update memory bank
+                self.memory_bank.put(retrieved_doc_embeds)
             else:
                 raise NotImplementedError
 
@@ -867,8 +880,9 @@ class GenerativeQAModule(BaseTransformer):
         parser.add_argument('--distance', type=str, choices=['jsd', 'kl'], default='jsd')
         parser.add_argument('--no_question', action='store_true')
         parser.add_argument('--use_mlm', action='store_true')
-        parser.add_argument('--in_batch_neg', type=str, default='none', choices=['none', 'zero'],
-                            help='specifies how to use retrieved docs for other questions as in-batch negatives')
+        parser.add_argument('--negative_method', type=str, default='none', choices=['none', 'in_batch', 'memory_bank'],
+                            help='specifies how to use sample negative docs')
+        parser.add_argument('--memory_bank_size', type=int, default=None, help='size of the memory bank')
         return parser
 
     @staticmethod

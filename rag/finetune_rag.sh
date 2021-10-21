@@ -5,13 +5,16 @@
 #SBATCH --time=0
 #SBATCH --output=slurm_out/%j.out
 
+# wandb
+export WANDB_PROJECT="adapt-knowledge"
+
 # Add parent directory to python path to access lightning_base.py
 export PYTHONPATH="../":"${PYTHONPATH}"
 
-DATA_DIR=$1  # /home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa/full_qa_small
-MODEL_NAME_OR_PATH=facebook/rag-sequence-nq # facebook/rag-sequence-nq
-MODEL2=models_more/cwq_goldneg/rag_ssm_explicit/checkpoint11
-index_path=$2
+data=$1  # /home/jzb/exp/Break/break_dataset/QDMR-high-level/hotpotqa/full_qa_small
+model1=$2 # facebook/rag-sequence-nq
+model2=models_more/cwq_goldneg/rag_ssm_explicit/checkpoint11
+index_path=$3
 max_combined_length=256
 max_source_length=128
 max_target_length=128
@@ -21,20 +24,23 @@ consistency_loss=no
 distance=jsd
 multitask=no
 hop=1
-OUTPUT_DIR=$3  # models/rag_combine
-gpus=$4
-ngpus=$5
+output=$4  # models/rag_combine
+gpus=$5
+IFS=',' read -ra gpus_list <<< "$gpus"  # split gpus by ','
+ngpus=${#gpus_list[@]}  # count the number of gpus
 port=$6
-batch_size=4  # $(( 1*${ngpus} ))
+batch_size=4
 epochs=3
 freeze=none
-in_batch_neg=none
+negative_method=none
+memory_bank_size=500
 
 #HF_HOME=$HOME/tir4/hf_home_cache
 CUDA_VISIBLE_DEVICES=${gpus} python finetune_rag.py \
-    --data_dir $DATA_DIR \
-    --output_dir $OUTPUT_DIR \
-    --model_name_or_path $MODEL_NAME_OR_PATH \
+    --logger_name default \
+    --data_dir ${data} \
+    --output_dir ${output} \
+    --model_name_or_path ${model1} \
     --model_type rag_sequence \
     --index_path ${index_path} \
     --fp16 \
@@ -68,4 +74,5 @@ CUDA_VISIBLE_DEVICES=${gpus} python finetune_rag.py \
     --distance ${distance} \
     --multitask ${multitask} \
     --freeze ${freeze} \
-    --in_batch_neg ${in_batch_neg}
+    --negative_method ${negative_method} \
+    --memory_bank_size ${memory_bank_size}
