@@ -8,3 +8,4 @@ wget==3.2
 matplotlib==3.3.4
 truecase==0.0.12
 spacy==3.0.4
+elasticsearch==7.7.1

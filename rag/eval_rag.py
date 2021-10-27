@@ -152,7 +152,7 @@ def evaluate_batch_retrieval_all(args, rag_model, questions, **kwargs):
         doc_ids = doc_ids.cpu().numpy()
         all_docs = ['\t'.join(map(lambda x: '{} || {} || {}'.format(x[0], x[1], x[2]), zip(doc_ids[i], docs['title'], docs['text']))) for i, docs in enumerate(all_docs)]
         scores = [0] * len(all_docs)
-        return all_docs, scores, None, None
+        return all_docs, scores, None, None, None
 
 
 def evaluate_batch_e2e_multihop_retrieval(args, rag_model, questions, **kwargs):
@@ -652,8 +652,8 @@ def main(args):
                 if args.use_mdr:
                     retriever = RagRetriever.from_pretrained(
                         'facebook/rag-sequence-base', index_name='custom',
-                        passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset'),
-                        index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss'))
+                        passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/ds'),
+                        index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/ds_hnsw_index.faiss'))
                 else:
                     if args.index_path is not None:
                         retrievers = []
@@ -662,8 +662,8 @@ def main(args):
                                 print(f'load custom index {ip}')
                                 retriever = MyRagRetriever.from_pretrained(
                                     'facebook/rag-sequence-nq', index_name='custom',
-                                    passages_path=os.path.join(ip, 'my_knowledge_dataset'),
-                                    index_path=os.path.join(ip, 'my_knowledge_dataset_hnsw_index.faiss'))
+                                    passages_path=os.path.join(ip, 'ds'),
+                                    index_path=os.path.join(ip, 'ds_hnsw_index.faiss'))
                             else:
                                 retriever = MyRagRetriever.from_pretrained('facebook/rag-sequence-base')
                             retrievers.append(retriever)

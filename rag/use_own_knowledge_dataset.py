@@ -46,10 +46,14 @@ def split_documents(documents: dict) -> dict:
 
 def embed(documents: dict, device, ctx_encoder: DPRContextEncoder, ctx_tokenizer: DPRContextEncoderTokenizerFast) -> dict:
     """Compute the DPR embeddings of document passages"""
-    input_ids = ctx_tokenizer(
+    tokenized = ctx_tokenizer(
         documents["title"], documents["text"], truncation=True, padding="longest", return_tensors="pt"
-    )["input_ids"]
-    embeddings = ctx_encoder(input_ids=input_ids.to(device=device), return_dict=True).pooler_output
+    )
+    # TODO: the official code didn't use token_type_ids which might cause problems
+    embeddings = ctx_encoder(input_ids=tokenized['input_ids'].to(device=device),
+                             attention_mask=tokenized['attention_mask'].to(device=device),
+                             token_type_ids=tokenized['token_type_ids'].to(device=device),
+                             return_dict=True).pooler_output
     result = {"embeddings": embeddings.detach().cpu().numpy()}
     return result
 
@@ -95,7 +99,10 @@ def main(
     # And compute the embeddings
     num_gpus = torch.cuda.device_count()
     ctx_encoder = DPRContextEncoder.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name)
-    ctx_tokenizer = DPRContextEncoderTokenizerFast.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name)
+    try:
+        ctx_tokenizer = DPRContextEncoderTokenizerFast.from_pretrained(rag_example_args.dpr_ctx_encoder_model_name)
+    except:  # fall back to the default tokenizer if not saved
+        ctx_tokenizer = DPRContextEncoderTokenizerFast.from_pretrained('facebook/dpr-ctx_encoder-multiset-base')
     new_features = Features(
         {"text": Value("string"), "title": Value("string"), "embeddings": Sequence(Value("float32"))}
     )  # optional, save as float32 instead of float64 to save space
@@ -120,7 +127,7 @@ def main(
         )
 
     # And finally save your dataset
-    passages_path = os.path.join(rag_example_args.output_dir, "my_knowledge_dataset")
+    passages_path = os.path.join(rag_example_args.output_dir, "ds")
     dataset.save_to_disk(passages_path)
     # from datasets import load_from_disk
     # dataset = load_from_disk(passages_path)  # to reload the dataset
@@ -134,7 +141,7 @@ def main(
     dataset.add_faiss_index("embeddings", custom_index=index)
 
     # And save the index
-    index_path = os.path.join(rag_example_args.output_dir, "my_knowledge_dataset_hnsw_index.faiss")
+    index_path = os.path.join(rag_example_args.output_dir, "ds_hnsw_index.faiss")
     dataset.get_index("embeddings").save(index_path)
     # dataset.load_faiss_index("embeddings", index_path)  # to reload the index
 

@@ -162,8 +162,8 @@ class GenerativeQAModule(BaseTransformer):
                 if self.use_mdr:
                     retriever = RagPyTorchDistributedRetriever.from_pretrained(
                         'facebook/rag-sequence-base', index_name='custom',
-                        passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset'),
-                        index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/my_knowledge_dataset_hnsw_index.faiss'))
+                        passages_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/ds'),
+                        index_path=os.path.join(root_to_mdr, 'data/hotpot_dataset/ds_hnsw_index.faiss'))
                 else:
                     if self.retrieval_mode == 'no':
                         retriever = RagPyTorchDistributedRetriever.from_pretrained('facebook/rag-sequence-nq', index_name="exact", use_dummy_dataset=True)
@@ -172,8 +172,8 @@ class GenerativeQAModule(BaseTransformer):
                             print(f'load custom index {config.index_path}')
                             retriever = MyRagPyTorchDistributedRetriever.from_pretrained(
                                 'facebook/rag-sequence-nq', index_name='custom',
-                                passages_path=os.path.join(config.index_path, 'my_knowledge_dataset'),
-                                index_path=os.path.join(config.index_path, 'my_knowledge_dataset_hnsw_index.faiss'))
+                                passages_path=os.path.join(config.index_path, 'ds'),
+                                index_path=os.path.join(config.index_path, 'ds_hnsw_index.faiss'))
                         else:
                             retriever = MyRagPyTorchDistributedRetriever.from_pretrained(
                                 'facebook/rag-sequence-base', config=RagConfig.from_pretrained('facebook/rag-sequence-base'))
