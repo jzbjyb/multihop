@@ -1,7 +1,7 @@
 datasets==1.2.1
 faiss-cpu==1.6.5
 GitPython==3.1.12
-transformers==4.2.1
+transformers==4.3.3
 psutil==5.8.0
 pytorch-lightning==1.1.4
 wget==3.2
