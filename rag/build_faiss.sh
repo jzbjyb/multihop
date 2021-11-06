@@ -13,8 +13,8 @@ fi
 
 input=$1
 output=$2
-rag_model=facebook/rag-sequence-nq  # $3
-ctx_model=facebook/dpr-ctx_encoder-multiset-base  # $4
+rag_model=$3  # facebook/rag-sequence-nq
+ctx_model=$4  # facebook/dpr-ctx_encoder-multiset-base
 batch_size=256
 m=32
 

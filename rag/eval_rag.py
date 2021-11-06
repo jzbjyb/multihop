@@ -7,6 +7,7 @@ import ast
 import logging
 import os
 import sys
+import time
 
 import pandas as pd
 import torch
@@ -356,6 +357,7 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str], **kwa
                 text = truncate_context_with_question(
                     ct + rag_model.config.title_sep + add_context + ' ' + cd, q, max_length=args.max_source_length) \
                        + rag_model.config.doc_sep + ('A: ' if args.no_question else q)
+            text = text.replace('[MASK]', '<mask>')
             return text.replace("  ", " "), score
         if len(qtd) == 1:
             return qtd[0].replace("  ", " "), score
@@ -375,25 +377,45 @@ def evaluate_batch_e2e_with_context(args, rag_model, questions: List[str], **kwa
         doc_score = torch.tensor(list(map(itemgetter(1), text_scores))).view(
             cinput_ids.size(0) // args.n_docs, args.n_docs).to(args.device)
         assert cinput_ids.size(0) % args.n_docs == 0, 'the batch is incomplete'
-        outputs, logprobs = rag_model.generate(
-            context_input_ids=cinput_ids,
-            context_attention_mask=cattention_mask,
-            doc_scores=doc_score,
-            num_beams=args.num_beams,
-            min_length=args.min_length,
-            max_length=args.max_length,
-            early_stopping=False,
-            num_return_sequences=args.num_return_sequences,
-            n_docs=args.n_docs,
-            bad_words_ids=[[0, 0]],  # BART likes to repeat BOS tokens, dont allow it to generate more than one
-        )
-        answers = rag_model.retriever.generator_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+
+        if not kwargs['candidates']:
+            outputs, logprobs = rag_model.generate(
+                context_input_ids=cinput_ids,
+                context_attention_mask=cattention_mask,
+                doc_scores=doc_score,
+                num_beams=args.num_beams,
+                min_length=args.min_length,
+                max_length=args.max_length,
+                early_stopping=False,
+                num_return_sequences=args.num_return_sequences,
+                n_docs=args.n_docs,
+                bad_words_ids=[[0, 0]],  # BART likes to repeat BOS tokens, dont allow it to generate more than one
+            )
+            answers = rag_model.retriever.generator_tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        else:
+            candidates = kwargs['candidates']
+            cand_input_ids = rag_model.retriever.generator_tokenizer.batch_encode_plus(
+                candidates,
+                max_length=args.max_length,
+                return_tensors='pt',
+                padding='max_length',
+                truncation=True,
+            ).input_ids.to(args.device)
+            outputs = rag_model(
+                context_input_ids=cinput_ids,
+                context_attention_mask=cattention_mask,
+                doc_scores=doc_score,
+                labels=cand_input_ids,
+                exclude_bos_score=True,
+            )
+            logprobs = -outputs['loss']
+            answers = candidates
 
     if args.print_predictions:
         for q, a in zip(questions, answers):
             logger.info("Q: {} - A: {}".format(q, a))
 
-    return answers, logprobs.cpu().numpy(), None, None
+    return answers, logprobs.cpu().numpy(), None, None, None
 
 
 def get_args():
@@ -428,7 +450,7 @@ def get_args():
     )
     parser.add_argument(
         "--eval_mode",
-        choices=["e2e", "retrieval", "e2ec", "e2ec_nq", "break", "pseudo_break", "retrieval_all", "e2e_multichoice"],
+        choices=["e2e", "retrieval", "e2ec", "e2ec_nq", "break", "pseudo_break", "retrieval_all", "e2e_multichoice", "e2ec_multichoice"],
         default="e2e",
         type=str,
         help="Evaluation mode, e2e calculates exact match and F1 of the downstream task, retrieval calculates precision@k.",
@@ -619,7 +641,7 @@ def main(args):
     if args.eval_mode in {"e2e", "e2e_multichoice"}:
         evaluate_batch_fn = evaluate_batch_e2e_multihop_retrieval
         score_fn = get_scores
-    elif args.eval_mode in {'e2ec', 'e2ec_nq'}:
+    elif args.eval_mode in {'e2ec', 'e2ec_nq', 'e2ec_multichoice'}:
         evaluate_batch_fn = evaluate_batch_e2e_with_context
         score_fn = get_scores
     elif args.eval_mode == 'break':
@@ -646,6 +668,7 @@ def main(args):
         logger.info("  Predictions will be stored under {}".format(args.predictions_path))
 
         if args.model_type.startswith("rag"):
+            retrievers = []
             if args.eval_mode in {'e2ec', 'e2ec_nq', 'pseudo_break'}:
                 retriever = RagRetriever.from_pretrained('facebook/rag-sequence-nq', index_name="exact", use_dummy_dataset=True)
             else:
@@ -730,17 +753,23 @@ def main(args):
                 questions = []
                 golds = []
                 alias_li: List[List[str]] = []
+                candidates: List[str] = []
                 for line in tqdm(eval_file):
                     if args.eval_mode == 'e2e_multichoice':
                         alias = gold_file.readline().rstrip('\n').split('\t')
                         questions.append(line.strip())
                         golds.append(alias[0])  # assume the first one is gold
                         alias_li.append(alias)
+                    elif args.eval_mode == 'e2ec_multichoice':
+                        cands = gold_file.readline().rstrip('\n').split('\t')
+                        questions.extend([line.strip()] * len(cands))
+                        candidates.extend(cands)
+                        golds.append(cands[0])  # assume the first one is gold
                     else:
                         questions.append(line.strip())
                         golds.append(gold_file.readline().rstrip('\n'))
                     if len(questions) >= args.eval_batch_size:
-                        answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions, eval_target=alias_li)
+                        answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions, eval_target=alias_li, candidates=candidates)
                         preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                         preds_file.flush()
                         if args.eval_mode in {'e2e', 'e2e_multichoice'}:
@@ -749,8 +778,9 @@ def main(args):
                         questions = []
                         golds = []
                         alias_li = []
+                        candidates = []
                 if len(questions) > 0:
-                    answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions, eval_target=alias_li)
+                    answers, logprobs, ret_docs, ret_doc_ids, all_docs = evaluate_batch_fn(args, model, questions, eval_target=alias_li, candidates=candidates)
                     preds_file.write('\n'.join('{}\t{:.5f}'.format(a, l) for a, l in zip(answers, logprobs)) + '\n')
                     preds_file.flush()
                     if args.eval_mode in {'e2e', 'e2e_multichoice'}:

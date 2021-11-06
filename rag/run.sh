@@ -39,6 +39,9 @@ elif [[ ${mode} == 'pseudo_break' ]]; then
 elif [[ ${mode} == 'e2ec' ]]; then
     ndocs=1
     max_source_length=512
+elif [[ ${mode} == 'e2ec_multichoice' ]]; then
+    ndocs=1
+    max_source_length=512
 elif [[ ${mode} == 'e2ec_nq' ]]; then
     ndocs=1
     max_source_length=512
@@ -71,4 +74,4 @@ python eval_rag.py \
     --eval_batch_size ${batch_size} \
     --print_predictions \
     --generation_method ${gmethod} \
-    --recalculate ${add} ${index_path} &> ${out}.out
+    --recalculate ${add} ${index_path}

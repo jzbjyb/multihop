@@ -50,7 +50,7 @@ CUDA_VISIBLE_DEVICES=${gpus} python finetune_rag.py \
     --do_predict \
     --n_val -1 \
     --train_batch_size ${batch_size} \
-    --eval_batch_size 1 \
+    --eval_batch_size ${batch_size} \
     --max_source_length ${max_source_length} \
     --max_target_length ${max_target_length} \
     --val_max_target_length ${max_target_length} \

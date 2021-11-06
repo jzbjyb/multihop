@@ -116,9 +116,12 @@ def main(
         shards = pool.map(partial(shard_worker, ctx_tokenizer=ctx_tokenizer, batch_size=processing_args.batch_size, features=new_features),
                           [(shards[i], devices[i], replicas[i]) for i in range(num_gpus)])
         dataset = concatenate_datasets(shards)
+        # And finally save your dataset
+        passages_path = os.path.join(rag_example_args.output_dir, "ds")
+        dataset.save_to_disk(passages_path)
         del replicas[:]  # remove models
-        pool.join()
         pool.close()
+        pool.join()
     else:
         ctx_encoder.to(device=device)
         dataset = dataset.map(
@@ -128,11 +131,11 @@ def main(
             features=new_features,
             num_proc=num_gpus
         )
+        # And finally save your dataset
+        passages_path = os.path.join(rag_example_args.output_dir, "ds")
+        dataset.save_to_disk(passages_path)
         del ctx_encoder  # remove models
 
-    # And finally save your dataset
-    passages_path = os.path.join(rag_example_args.output_dir, "ds")
-    dataset.save_to_disk(passages_path)
     #from datasets import load_from_disk
     #passages_path = os.path.join(rag_example_args.output_dir, 'ds')
     #dataset = load_from_disk(passages_path)  # to reload the dataset

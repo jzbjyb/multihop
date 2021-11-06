@@ -139,6 +139,10 @@ class Seq2SeqDataset(Dataset):
             source_line = source_tokenizer.convert_tokens_to_string(source_line)
         else:
             tgt_line = linecache.getline(str(self.tgt_file), index).rstrip("\n")
+            if '\t\t' in tgt_line:  # multiple answers
+                tgt_line = ' # '.join([a.split('\t')[0] for a in tgt_line.split('\t\t')][:10])  # use 10 answers at most
+            elif '\t' in tgt_line:  # aliases
+                tgt_line = tgt_line.split('\t')[0]
         assert source_line, f"empty source line for index {index}"
         assert tgt_line, f"empty tgt line for index {index}"
 
@@ -151,10 +155,12 @@ class Seq2SeqDataset(Dataset):
 
         # Pad source and target to the right
         source_inputs = encode_line(source_tokenizer, source_line, self.max_source_length, "right")
-        source_inputs_for_decoder = encode_line(target_tokenizer, source_line, self.max_source_length, "right")
+        _source_line = source_line.replace('[MASK]', '<mask>')
+        source_inputs_for_decoder = encode_line(target_tokenizer, _source_line, self.max_source_length, "right")
         if source_line2:
             source_inputs2 = encode_line(source_tokenizer, source_line2, self.max_source_length, "right")
-            source_inputs_for_decoder2 = encode_line(target_tokenizer, source_line2, self.max_source_length, "right")
+            _source_line2 = source_line2.replace('[MASK]', '<mask>')
+            source_inputs_for_decoder2 = encode_line(target_tokenizer, _source_line2, self.max_source_length, "right")
         target_inputs = encode_line(target_tokenizer, tgt_line, self.max_target_length, "right")
 
         source_ids = source_inputs["input_ids"].squeeze()
