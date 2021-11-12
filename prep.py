@@ -1586,10 +1586,44 @@ def get_hotpotqa_subq(root_dir, source_file, target_file):
       tfout.write('{}\n'.format(r['answer'].strip()))
 
 
+def add_question(with_ret_file: str,
+                 no_ret_file: str,
+                 target_file: str,
+                 id_file: str,
+                 out_source_file: str,
+                 op: str = 'replace'):
+  with open(with_ret_file, 'r') as wrfin, \
+    open(no_ret_file, 'r') as nrfin, \
+    open(target_file, 'r') as tfin, \
+    open(id_file, 'r') as ifin, \
+    open(out_source_file, 'w') as sfout, \
+    open(out_source_file.replace('.source', '.target'), 'w') as tfout:
+    no_ret_file_idx = 0
+    for i, wr in enumerate(wrfin):
+      idx = int(ifin.readline())
+      target = tfin.readline()
+      while no_ret_file_idx < idx:
+        _ = nrfin.readline()
+        no_ret_file_idx += 1
+      new_ques = nrfin.readline().rstrip('\n')
+      no_ret_file_idx += 1
+      ques, title, body = wr.rstrip('\n').split('\t')
+      if op == 'replace':
+        sfout.write(f'{new_ques}\t{title}\t{body}\n')
+        tfout.write(target)
+      elif op == 'combine':
+        sfout.write(f'{ques}\t{title}\t{body}\n')
+        sfout.write(f'{new_ques}\t{title}\t{body}\n')
+        tfout.write(target)
+        tfout.write(target)
+      else:
+        raise NotImplementedError
+
+
 if __name__ == '__main__':
   parser = argparse.ArgumentParser()
   parser.add_argument('--task', type=str, choices=[
-    'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'ana', 'compare', 'ner', 'ner_replace',
+    'eval', 'hotpotqa', 'convert_hotpotqa', 'comqa', 'cwq', 'cwq_sql', 'ana', 'compare', 'ner', 'ner_replace',
     'ner_fill', 'nq', 'ada', 'same', 'overlap', 'to_multihop', 'format', 'subset',
     'format_sh_mh', 'dict2csv', 'format_traverse', 'combine_para', 'break_ana', 'el', 'load',
     'combine_tomultihop', 'gold_ret', 'gold_ret_compare', 'gold_ret_filter', 'topk_ret',
@@ -1605,7 +1639,7 @@ if __name__ == '__main__':
     'implicit_data_nq', 'explicit_data_nq', 'compare_two', 'get_snippet', 'combine_snippet',
     'get_gold_context_data_nq', 'rag2nq_format', 'statement_analysis',
     'only_line', 'combine_synthetic', 'get_subset_synthetic',
-    'filter_by_mask', 'replace_with_placeholder', 'get_hotpotqa_subq'], default='hotpotqa')
+    'filter_by_mask', 'replace_with_placeholder', 'get_hotpotqa_subq', 'replace_question'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -1659,23 +1693,25 @@ if __name__ == '__main__':
           sfout.write('{}\n'.format(mh['q']))
           tfout.write('{}\n'.format(mh['a']))
 
-  elif args.task == 'cwq':
+  elif args.task in {'cwq', 'cwq_sql'}:
+    output_key = 'q' if args.task == 'cwq' else 'sql'
     use_ph = False
-    wq = WebQuestion('../Break/break_dataset/QDMR/webqsp')
-    cwq = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq', webq=wq)
+    simplify_sql = False
+    wq = WebQuestion('webqsp_raw')
+    cwq = ComplexWebQuestion('complexwebq_raw', webq=wq)
     with open(args.output + '.id', 'w') as ifout,\
       open(args.output + '.source', 'w') as sfout, \
       open(args.output + '.single.target', 'w') as stfout, \
       open(args.output + '.multi.target', 'w') as mtfout:
-      for de in cwq.decompose(split=args.split, use_ph=use_ph):
+      for de in cwq.decompose(split=args.split, use_ph=use_ph, simplify_sql=simplify_sql):
         for sh in de.single_hops:
           ifout.write(de.ind + '\n')
-          sfout.write('{}\n'.format(sh['q']))
+          sfout.write('{}\n'.format(sh[output_key]))
           stfout.write('{}\n'.format(sh['a'][0][0]))
           mtfout.write('{}\n'.format(MultihopQuestion.format_multi_answers_with_alias(sh['a'])))
         mh = de.multi_hop
         ifout.write(de.ind + '\n')
-        sfout.write('{}\n'.format(mh['q']))
+        sfout.write('{}\n'.format(mh[output_key]))
         stfout.write('{}\n'.format(mh['a'][0][0]))
         mtfout.write('{}\n'.format(MultihopQuestion.format_multi_answers_with_alias(mh['a'])))
 
@@ -1803,8 +1839,7 @@ if __name__ == '__main__':
 
     addtion_res = None
     if 'cwq' in pred_file or 'complexwebq' in pred_file:
-      addtion_res = ComplexWebQuestion('../Break/break_dataset/QDMR/complexwebq',
-                                       webq=WebQuestion('../Break/break_dataset/QDMR/webqsp'))
+      addtion_res = ComplexWebQuestion('complexwebq_raw', webq=WebQuestion('webqsp_raw'))
     if 'xfactr' in add_file:
       if 'freq' in add_file:
         addtion_res = lambda x: float(x)
@@ -2836,3 +2871,8 @@ if __name__ == '__main__':
     root_dir = args.input[0]
     source_file, target_file = args.output + '.source', args.output + '.target'
     get_hotpotqa_subq(root_dir, source_file, target_file)
+
+  elif args.task == 'replace_question':
+    with_ret_file, no_ret_file, target_file, id_file = args.input
+    out_source_file = args.output
+    add_question(with_ret_file, no_ret_file, target_file, id_file, out_source_file, op='combine')
