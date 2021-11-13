@@ -48,7 +48,16 @@ skip_ner_types = {'DATE', 'TIME', 'PERCENT', 'MONEY', 'QUANTITY', 'ORDINAL', 'CA
 ner_type2wiki_type = {}
 
 
-def evaluation(predictions: str, targets: str, eval_mode: str='multi-multi', pred_sep=' # ', ans_sep='\t\t', alias_sep='\t', score_fn=exact_match_score, remove_dup: bool=True, path: bool=False, path_inverse: bool=True):
+def evaluation(predictions: str,
+               targets: str,
+               eval_mode: str='multi-multi',
+               pred_sep=join_sep,
+               ans_sep=ans_sep,
+               alias_sep=alias_sep,
+               score_fn=exact_match_score,
+               remove_dup: bool=True,
+               path: bool=False,
+               path_inverse: bool=True):
   predictions = predictions.strip()
   if eval_mode == 'multi-multi':
     if path:
@@ -489,12 +498,12 @@ def gold_ret_filter(ret_file: str, ret_file_id: str, output_file: str, num_hop: 
   print('found {} with both single and multihop'.format(count))
 
 
-def convert_to_unifiedqa_ol(source_file: str, target_file: str, output_file: str, use_hop: Set[int]={1, 2, 0}, num_hop: int=2, sep: str=' # '):
+def convert_to_unifiedqa_ol(source_file: str, target_file: str, output_file: str, use_hop: Set[int]={1, 2, 0}, num_hop: int=2, sep: str=join_sep):
   count = 0
   with open(source_file, 'r') as sfin, open(target_file, 'r') as tfin, open(output_file, 'w') as fout:
     for i, l in enumerate(sfin):
       question = l.strip()
-      answers = [ans.split('\t')[0] for ans in tfin.readline().rstrip('\n').split('\t\t')]
+      answers = [ans.split(alias_sep)[0] for ans in tfin.readline().rstrip('\n').split(ans_sep)]
       if (i + 1) % (num_hop + 1) not in use_hop:
         continue
       fout.write('{}\t{}\t{}\t{}\n'.format(count, question, sep.join(answers), 0))
@@ -502,7 +511,7 @@ def convert_to_unifiedqa_ol(source_file: str, target_file: str, output_file: str
 
 
 def combine_split(source_files: List[str], target_files: List[str], output_dir: str, split: str,
-                  num_hop: int=2, ans_sep: str='\t\t', alias_sep: str='\t', join_sep: str=' # '):
+                  num_hop: int=2, ans_sep: str='\t\t', alias_sep: str='\t', join_sep: str = join_sep):
   sub_dirs = ['ssm', 'ss-', 's-m', '-sm']  # only works for num_hop=2
   filter_inds = [{0, 1, 2}, {0, 1}, {0, 2}, {1, 2}]
   for sub_dir, filter_ind in zip(sub_dirs, filter_inds):
@@ -1639,7 +1648,7 @@ if __name__ == '__main__':
     'implicit_data_nq', 'explicit_data_nq', 'compare_two', 'get_snippet', 'combine_snippet',
     'get_gold_context_data_nq', 'rag2nq_format', 'statement_analysis',
     'only_line', 'combine_synthetic', 'get_subset_synthetic',
-    'filter_by_mask', 'replace_with_placeholder', 'get_hotpotqa_subq', 'replace_question'], default='hotpotqa')
+    'filter_by_mask', 'replace_with_placeholder', 'get_hotpotqa_subq', 'add_question'], default='hotpotqa')
   parser.add_argument('--input', type=str, nargs='+')
   parser.add_argument('--prediction', type=str, nargs='+')
   parser.add_argument('--output', type=str, default=None)
@@ -2416,7 +2425,7 @@ if __name__ == '__main__':
   elif args.task == 'convert_unifiedqa_ol':
     source_file, target_file = args.input
     output_file = args.output
-    convert_to_unifiedqa_ol(source_file, target_file, output_file, use_hop={1, 0}, num_hop=2)
+    convert_to_unifiedqa_ol(source_file, target_file, output_file, use_hop={1, 2, 0}, num_hop=2)
 
   elif args.task == 'combine_split':
     source_files = args.input
@@ -2872,7 +2881,7 @@ if __name__ == '__main__':
     source_file, target_file = args.output + '.source', args.output + '.target'
     get_hotpotqa_subq(root_dir, source_file, target_file)
 
-  elif args.task == 'replace_question':
+  elif args.task == 'add_question':
     with_ret_file, no_ret_file, target_file, id_file = args.input
     out_source_file = args.output
     add_question(with_ret_file, no_ret_file, target_file, id_file, out_source_file, op='combine')
